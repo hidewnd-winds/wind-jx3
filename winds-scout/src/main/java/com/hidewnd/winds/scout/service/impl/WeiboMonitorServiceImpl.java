@@ -12,10 +12,12 @@ import com.hidewnd.winds.scout.service.WeiboFetchService;
 import com.hidewnd.winds.scout.service.WeiboMonitorService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -29,7 +31,7 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 @Slf4j
 @Service
-public class WeiboMonitorServiceImpl implements WeiboMonitorService {
+public class WeiboMonitorServiceImpl implements WeiboMonitorService, SchedulingConfigurer {
 
     private static final DateTimeFormatter POST_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -57,7 +59,18 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
         this.clock = clock;
     }
 
-    @Scheduled(fixedDelay = 240_000L, initialDelay = 10_000L)
+    @Override
+    public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
+        taskRegistrar.addTriggerTask(this::poll, context -> {
+            Instant completedAt = context.lastCompletion();
+            if (completedAt == null) {
+                return context.getClock().instant().plusSeconds(10);
+            }
+            // 每轮完成后重新生成 3 分钟 ±30 秒的间隔，避免固定周期请求。
+            return completedAt.plusSeconds(ThreadLocalRandom.current().nextLong(150, 211));
+        });
+    }
+
     @Override
     public void poll() {
         log.info("微博监听轮询开始");
