@@ -39,11 +39,12 @@ springdoc:
 winds:
   jx3:
     enabled: true
+    # 新闻/公告成功后按此基准间隔 ±20% 抖动，失败仍指数退避。
     news-interval: 30s
     maintenance-interval: 30s
     server-interval: 10s
     patch-interval: 30s
-    # 第三方开服事件触发即时核验；独立于常规轮询持续保持连接。
+    # 第三方开服及官方新闻/公告事件触发即时核验，共用此持续连接。
     socket:
       enabled: true
       endpoint: wss://socket.nicemoe.cn

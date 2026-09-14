@@ -45,13 +45,16 @@ public class Jx3Configuration {
     public Jx3ApiWebSocketClient jx3ApiWebSocketClient(
             @Qualifier("jx3ApiHttpClient") HttpClient http,
             ObjectMapper mapper, ServerMonitorService monitor,
+            @Qualifier("jx3NewsMonitor") ArticleMonitorService news,
+            @Qualifier("jx3MaintenanceMonitor") ArticleMonitorService maintenance,
             @Qualifier("taskScheduler") TaskScheduler scheduler, Jx3ApiSocketProperties properties) {
-        return new Jx3ApiWebSocketClient(http, mapper, monitor, scheduler, Clock.systemUTC(), properties);
+        return new Jx3ApiWebSocketClient(http, mapper, monitor, news, maintenance, scheduler, Clock.systemUTC(), properties);
     }
 
     @Bean
-    public OfficialClient jx3OfficialClient(ObjectMapper mapper) {
-        return new OfficialClient(mapper);
+    public OfficialClient jx3OfficialClient(ObjectMapper mapper,
+            @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
+        return new OfficialClient(mapper, executor);
     }
 
     @Bean
@@ -64,9 +67,10 @@ public class Jx3Configuration {
             OfficialClient client,
             Jx3RecordRepository repository,
             ApplicationEventPublisher publisher,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
         return new ArticleMonitorServiceImpl(
-                false, client, repository, publisher, mapper, Clock.systemUTC());
+                false, client, repository, publisher, mapper, Clock.systemUTC(), executor);
     }
 
     @Bean
@@ -74,9 +78,10 @@ public class Jx3Configuration {
             OfficialClient client,
             Jx3RecordRepository repository,
             ApplicationEventPublisher publisher,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
         return new ArticleMonitorServiceImpl(
-                true, client, repository, publisher, mapper, Clock.systemUTC());
+                true, client, repository, publisher, mapper, Clock.systemUTC(), executor);
     }
 
     @Bean

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hidewnd.winds.jx3.config.Jx3ApiSocketProperties;
 import com.hidewnd.winds.jx3.model.ServerOpening;
+import com.hidewnd.winds.jx3.model.ArticleNotification;
+import com.hidewnd.winds.jx3.service.ArticleMonitorService;
 import com.hidewnd.winds.jx3.service.ServerMonitorService;
 import com.hidewnd.winds.jx3.support.Jx3Time;
 import jakarta.annotation.PostConstruct;
@@ -27,6 +29,8 @@ public class Jx3ApiWebSocketClient {
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final ServerMonitorService monitor;
+    private final ArticleMonitorService news;
+    private final ArticleMonitorService maintenance;
     private final TaskScheduler scheduler;
     private final Clock clock;
     private final Jx3ApiSocketProperties properties;
@@ -38,10 +42,13 @@ public class Jx3ApiWebSocketClient {
     private boolean stopped = true;
 
     public Jx3ApiWebSocketClient(HttpClient http, ObjectMapper mapper, ServerMonitorService monitor,
+            ArticleMonitorService news, ArticleMonitorService maintenance,
             TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties) {
         this.http = http;
         this.mapper = mapper;
         this.monitor = monitor;
+        this.news = news;
+        this.maintenance = maintenance;
         this.scheduler = scheduler;
         this.clock = clock;
         this.properties = properties;
@@ -119,7 +126,7 @@ public class Jx3ApiWebSocketClient {
         }
         if (!stopped) {
             // 不记录远端关闭原因、异常文本或连接 URL，避免第三方载荷或查询凭据进入日志。
-            log.warn("第三方开服 WSS 已断开，原因={}；{} 后重连", reason, properties.reconnectInterval());
+            log.warn("第三方事件 WSS 已断开，原因={}；{} 后重连", reason, properties.reconnectInterval());
         }
     }
 
@@ -137,11 +144,26 @@ public class Jx3ApiWebSocketClient {
             var root = mapper.readTree(message);
             if (root == null || !root.path("action").isIntegralNumber()
                     || !root.path("action").canConvertToInt()
-                    || root.path("action").intValue() != 2001
                     || !"success".equals(root.path("status").textValue())) {
                 return;
             }
             var detail = root.path("detail");
+            int action = root.path("action").intValue();
+            if (action == 2002) {
+                ArticleNotification notification = ArticleNotification.from(detail);
+                log.info("收到第三方文章通知，栏目={}，文章={}", notification.categoryId(), notification.articleId());
+                (notification.maintenance() ? maintenance : news).verifyArticle(notification)
+                        .whenComplete((ignored, error) -> {
+                            if (error != null) {
+                                log.error("第三方文章通知处理失败，文章={}，异常类型={}",
+                                        notification.articleId(), error.getClass().getSimpleName());
+                            }
+                        });
+                return;
+            }
+            if (action != 2001) {
+                return;
+            }
             if (!"1".equals(detail.path("status").textValue())) {
                 return;
             }
@@ -169,7 +191,7 @@ public class Jx3ApiWebSocketClient {
                 }
             });
         } catch (JsonProcessingException | IllegalArgumentException | java.time.DateTimeException exception) {
-            log.warn("忽略无效的第三方开服消息，异常类型={}", exception.getClass().getSimpleName());
+            log.warn("忽略无效的第三方事件消息，异常类型={}", exception.getClass().getSimpleName());
         }
     }
 
@@ -186,7 +208,7 @@ public class Jx3ApiWebSocketClient {
                 }
                 socket = opened;
                 lastPong = clock.instant();
-                log.info("第三方开服 WSS 连接成功");
+                log.info("第三方事件 WSS 连接成功");
             }
             opened.request(1);
         }

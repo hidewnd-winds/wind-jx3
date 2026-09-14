@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hidewnd.winds.jx3.model.Article;
+import com.hidewnd.winds.jx3.model.ArticleNotification;
 import com.hidewnd.winds.jx3.model.PatchInfo;
 import com.hidewnd.winds.jx3.model.PatchManifest;
 import com.hidewnd.winds.jx3.parser.ArticleParser;
@@ -28,6 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 
 /** 只访问官方固定来源；清单条件请求缓存由此客户端持有，失败响应不会替换有效缓存。 */
 public class OfficialClient implements AutoCloseable {
@@ -36,20 +43,24 @@ public class OfficialClient implements AutoCloseable {
             URI.create("https://jx3hdv4qq-autoupdate.xoyocdn.com/jx3hd_v4/zhcn_hd/");
     private final HttpClient http;
     private final ObjectMapper mapper;
+    private final Executor executor;
+    // 列表与通知共享总预算，公平排队避免单一路径持续占满官方正文请求。
+    private final Semaphore articleRequests = new Semaphore(8, true);
     private final Map<URI, CachedResponse> cache = new ConcurrentHashMap<>();
 
-    public OfficialClient(ObjectMapper mapper) {
+    public OfficialClient(ObjectMapper mapper, Executor executor) {
         this(
                 HttpClient.newBuilder()
                         .connectTimeout(Duration.ofSeconds(5))
                         .followRedirects(HttpClient.Redirect.NEVER)
                         .build(),
-                mapper);
+                mapper, executor);
     }
 
-    OfficialClient(HttpClient http, ObjectMapper mapper) {
+    OfficialClient(HttpClient http, ObjectMapper mapper, Executor executor) {
         this.http = http;
         this.mapper = mapper;
+        this.executor = executor;
     }
 
     public PatchManifest fetchPatchManifest() {
@@ -111,6 +122,12 @@ public class OfficialClient implements AutoCloseable {
     /** 分页回看至上轮扫描前或七日边界；按发布时间排序，置顶条目不作为停止依据。 */
     public List<Article> fetchArticles(boolean maintenance, Instant since) {
         List<Article> articles = new ArrayList<>();
+        fetchArticles(maintenance, since, articles::add);
+        return articles;
+    }
+
+    /** 监听使用逐篇回调，已经完成的文章不等待同页其他正文。 */
+    public void fetchArticles(boolean maintenance, Instant since, Consumer<Article> consumer) {
         Set<String> seen = new HashSet<>();
         // 对应官网最新消息的三个栏目：0 为公告，2458 为新闻，2461 为活动。
         // 保留 maintenance 参数作为现有公告通道标识，分类不再依赖标题关键词。
@@ -119,16 +136,31 @@ public class OfficialClient implements AutoCloseable {
                 : List.of(
                         "action=get_article_list&catid=2458&order_by=inputtime&sort_by=desc",
                         "action=get_article_list&catid=2461&order_by=inputtime&sort_by=desc");
+        RuntimeException failure = null;
         for (String source : sources) {
             // 各栏目更新速度不同，必须独立分页，避免活动被新闻的时间边界挡住。
-            fetchArticleList(source, maintenance, since, articles, seen);
+            try {
+                fetchArticleList(source, maintenance, since, consumer, seen);
+            } catch (RuntimeException exception) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw exception;
+                }
+                if (failure == null) {
+                    failure = exception;
+                } else {
+                    failure.addSuppressed(exception);
+                }
+            }
         }
-        return articles;
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private void fetchArticleList(
-            String query, boolean maintenance, Instant since, List<Article> articles, Set<String> seen) {
+            String query, boolean maintenance, Instant since, Consumer<Article> consumer, Set<String> seen) {
         Set<String> pageSeen = new HashSet<>();
+        RuntimeException failure = null;
         for (int page = 1; page <= 100; page++) {
             JsonNode data = json(URI.create(API + query + "&num=30&page=" + page));
             JsonNode list = data.path("list");
@@ -136,10 +168,11 @@ public class OfficialClient implements AutoCloseable {
                 throw new IllegalStateException("文章列表格式变化");
             }
             if (list.isEmpty()) {
-                return;
+                break;
             }
             boolean reachedBoundary = false;
             int newItems = 0;
+            List<JsonNode> items = new ArrayList<>();
             for (JsonNode item : list) {
                 String id = item.path("id").asText();
                 if (!id.matches("\\d+")) {
@@ -168,37 +201,109 @@ public class OfficialClient implements AutoCloseable {
                 if (maintenance != customer || (maintenance && old) || !seen.add(id)) {
                     continue;
                 }
-                String detailQuery =
-                        customer
-                                ? "action=get_customer_article_detail&game=jx3&kid=" + id
-                                : "action=get_article_detail&catid=" + category + "&id=" + id;
-                JsonNode detail = json(URI.create(API + detailQuery));
-                if (!customer) {
-                    detail = detail.isArray() && !detail.isEmpty() ? detail.get(0) : null;
+                items.add(item);
+            }
+            try {
+                fetchArticleDetails(items, maintenance, consumer);
+            } catch (RuntimeException exception) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw exception;
                 }
-                if (detail == null || !detail.isObject() || !detail.hasNonNull("content")) {
-                    throw new IllegalStateException("文章详情缺失");
+                if (failure == null) {
+                    failure = exception;
+                } else {
+                    failure.addSuppressed(exception);
                 }
-                ObjectNode merged = ((ObjectNode) item).deepCopy();
-                merged.setAll((ObjectNode) detail);
-                // 详情中的空时间不能覆盖列表已经提供的有效官方发布时间。
-                for (String field : List.of("inputtime", "asktime")) {
-                    if (ArticleParser.parseTimestamp(merged.get(field)) == null
-                            && ArticleParser.parseTimestamp(item.get(field)) != null) {
-                        merged.set(field, item.get(field));
-                    }
-                }
-                articles.add(
-                        ArticleParser.parse(merged, detail.get("content").asText(), maintenance));
             }
             if (since == null || reachedBoundary || list.size() < 30) {
-                return;
+                break;
             }
             if (newItems == 0) {
                 throw new IllegalStateException("官网分页重复，停止本轮采集");
             }
+            if (page == 100) {
+                throw new IllegalStateException("官网分页超过上限，本轮不更新基线");
+            }
         }
-        throw new IllegalStateException("官网分页超过上限，本轮不更新基线");
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /** 只从通知提取数字身份，固定请求官网接口，不访问第三方载荷中的任意 URL。 */
+    public Article fetchArticle(ArticleNotification notification) {
+        ObjectNode item = mapper.createObjectNode()
+                .put("id", notification.articleId()).put("catid", notification.categoryId());
+        return fetchArticleDetail(item, notification.maintenance());
+    }
+
+    private Article fetchArticleDetail(JsonNode item, boolean maintenance) {
+        try {
+            articleRequests.acquire();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("文章采集等待已中断", exception);
+        }
+        try {
+            String id = item.path("id").asText();
+            String category = item.path("catid").asText();
+            String query = maintenance ? "action=get_customer_article_detail&game=jx3&kid=" + id
+                    : "action=get_article_detail&catid=" + category + "&id=" + id;
+            JsonNode detail = json(URI.create(API + query));
+            if (!maintenance) {
+                detail = detail.isArray() && !detail.isEmpty() ? detail.get(0) : null;
+            }
+            if (detail == null || !detail.isObject() || !detail.hasNonNull("content")) {
+                throw new IllegalStateException("文章详情缺失，文章=" + id);
+            }
+            ObjectNode merged = ((ObjectNode) item).deepCopy();
+            merged.setAll((ObjectNode) detail);
+            // 身份来自已校验的列表/链接；详情的空时间不能覆盖列表中的官方时间。
+            merged.put("id", id).put("catid", category);
+            for (String field : List.of("inputtime", "asktime")) {
+                if (ArticleParser.parseTimestamp(merged.get(field)) == null
+                        && ArticleParser.parseTimestamp(item.get(field)) != null) {
+                    merged.set(field, item.get(field));
+                }
+            }
+            return ArticleParser.parse(merged, detail.get("content").asText(), maintenance);
+        } finally {
+            articleRequests.release();
+        }
+    }
+
+    /** 每轮最多六个在途正文请求；完成一个补一个，慢请求和单篇失败不阻塞其他结果交付。 */
+    private void fetchArticleDetails(List<JsonNode> items, boolean maintenance, Consumer<Article> consumer) {
+        var completed = new ExecutorCompletionService<Article>(executor);
+        Set<Future<Article>> pending = new HashSet<>();
+        int submitted = 0;
+        RuntimeException failure = null;
+        try {
+            while (submitted < items.size() || !pending.isEmpty()) {
+                while (submitted < items.size() && pending.size() < 6) {
+                    JsonNode item = items.get(submitted++);
+                    pending.add(completed.submit(() -> fetchArticleDetail(item, maintenance)));
+                }
+                Future<Article> future = completed.take();
+                pending.remove(future);
+                try {
+                    consumer.accept(future.get());
+                } catch (ExecutionException | RuntimeException exception) {
+                    if (failure == null) {
+                        failure = new IllegalStateException("部分文章处理失败，本轮不更新基线");
+                    }
+                    failure.addSuppressed(exception);
+                }
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("文章采集已中断", exception);
+        } finally {
+            pending.forEach(future -> future.cancel(true));
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private JsonNode json(URI uri) {

@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 
 /** 共用应用调度器和异步执行器；每个来源独立串行轮询、退避和取消。 */
 @Slf4j
@@ -84,6 +85,7 @@ public class Jx3PollingScheduler {
             }
             running = new FutureTask<>(() -> {
                 Duration delay = interval;
+                Instant started = Instant.now();
                 try {
                     action.run();
                     lastSuccess = Instant.now();
@@ -91,9 +93,16 @@ public class Jx3PollingScheduler {
                         log.info("剑三采集恢复，来源={}", name);
                     }
                     failures = 0;
+                    // 文章源小幅错开探测相位；区服确认节奏和失败退避仍沿用原契约。
+                    if (name.equals("news") || name.equals("maintenance")) {
+                        delay = Duration.ofMillis(Math.max(1_000,
+                                Math.round(interval.toMillis() * ThreadLocalRandom.current().nextDouble(0.8, 1.2))));
+                    }
                 } catch (RuntimeException exception) {
                     delay = retryAfter(exception);
                 } finally {
+                    log.debug("剑三采集轮次结束，来源={}，耗时={}ms，下次等待={}ms，连续失败={}",
+                            name, Duration.between(started, Instant.now()).toMillis(), delay.toMillis(), failures);
                     // 异步任务实际完成后才计算下一轮，避免定时触发堆积或同一来源重叠执行。
                     schedule(delay);
                 }
@@ -110,8 +119,8 @@ public class Jx3PollingScheduler {
         private Duration retryAfter(RuntimeException exception) {
             failures = Math.min(6, failures + 1);
             long delayMillis = Math.min(600_000, interval.toMillis() * (1L << (failures - 1)));
-            log.warn("剑三采集失败，来源={}，最近成功={}，原因={}",
-                    name, lastSuccess, exception.getMessage(), exception);
+            log.warn("剑三采集失败，来源={}，最近成功={}，下次等待={}ms，原因={}",
+                    name, lastSuccess, delayMillis, exception.getMessage(), exception);
             return Duration.ofMillis(delayMillis);
         }
 
