@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hidewnd.winds.jx3.config.Jx3ApiSocketProperties;
 import com.hidewnd.winds.jx3.model.ServerOpening;
 import com.hidewnd.winds.jx3.model.ArticleNotification;
+import com.hidewnd.winds.jx3.model.PatchNotification;
 import com.hidewnd.winds.jx3.service.ArticleMonitorService;
+import com.hidewnd.winds.jx3.service.PatchMonitorService;
 import com.hidewnd.winds.jx3.service.ServerMonitorService;
 import com.hidewnd.winds.jx3.support.Jx3Time;
 import jakarta.annotation.PostConstruct;
@@ -31,6 +33,7 @@ public class Jx3ApiWebSocketClient {
     private final ServerMonitorService monitor;
     private final ArticleMonitorService news;
     private final ArticleMonitorService maintenance;
+    private final PatchMonitorService patches;
     private final TaskScheduler scheduler;
     private final Clock clock;
     private final Jx3ApiSocketProperties properties;
@@ -42,13 +45,14 @@ public class Jx3ApiWebSocketClient {
     private boolean stopped = true;
 
     public Jx3ApiWebSocketClient(HttpClient http, ObjectMapper mapper, ServerMonitorService monitor,
-            ArticleMonitorService news, ArticleMonitorService maintenance,
+            ArticleMonitorService news, ArticleMonitorService maintenance, PatchMonitorService patches,
             TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties) {
         this.http = http;
         this.mapper = mapper;
         this.monitor = monitor;
         this.news = news;
         this.maintenance = maintenance;
+        this.patches = patches;
         this.scheduler = scheduler;
         this.clock = clock;
         this.properties = properties;
@@ -149,6 +153,18 @@ public class Jx3ApiWebSocketClient {
             }
             var detail = root.path("detail");
             int action = root.path("action").intValue();
+            if (action == 2003) {
+                PatchNotification notification = PatchNotification.from(detail, clock.instant());
+                log.info("收到第三方更新包通知，版本={}->{}，声明包数={}",
+                        notification.nowVersion(), notification.newVersion(), notification.packageCount());
+                patches.verifyPatch(notification).whenComplete((ignored, error) -> {
+                    if (error != null) {
+                        log.error("第三方更新包通知处理失败，目标版本={}，异常类型={}",
+                                notification.newVersion(), error.getClass().getSimpleName());
+                    }
+                });
+                return;
+            }
             if (action == 2002) {
                 ArticleNotification notification = ArticleNotification.from(detail);
                 log.info("收到第三方文章通知，栏目={}，文章={}", notification.categoryId(), notification.articleId());

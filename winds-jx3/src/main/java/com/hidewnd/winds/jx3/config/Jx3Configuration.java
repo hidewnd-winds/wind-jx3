@@ -47,8 +47,9 @@ public class Jx3Configuration {
             ObjectMapper mapper, ServerMonitorService monitor,
             @Qualifier("jx3NewsMonitor") ArticleMonitorService news,
             @Qualifier("jx3MaintenanceMonitor") ArticleMonitorService maintenance,
+            PatchMonitorService patches,
             @Qualifier("taskScheduler") TaskScheduler scheduler, Jx3ApiSocketProperties properties) {
-        return new Jx3ApiWebSocketClient(http, mapper, monitor, news, maintenance, scheduler, Clock.systemUTC(), properties);
+        return new Jx3ApiWebSocketClient(http, mapper, monitor, news, maintenance, patches, scheduler, Clock.systemUTC(), properties);
     }
 
     @Bean
@@ -89,9 +90,10 @@ public class Jx3Configuration {
             OfficialClient client,
             Jx3RecordRepository repository,
             ApplicationEventPublisher publisher,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
         return new PatchMonitorServiceImpl(
-                client, repository, publisher, mapper, Clock.systemUTC());
+                client, repository, publisher, mapper, Clock.systemUTC(), executor);
     }
 
     @Bean

@@ -44,7 +44,7 @@ winds:
     maintenance-interval: 30s
     server-interval: 10s
     patch-interval: 30s
-    # 第三方开服及官方新闻/公告事件触发即时核验，共用此持续连接。
+    # 第三方开服、官方新闻/公告和更新包事件触发即时核验，共用此持续连接。
     socket:
       enabled: true
       endpoint: wss://socket.nicemoe.cn
