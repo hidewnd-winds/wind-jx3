@@ -161,7 +161,7 @@ public class WindsWebSocketHandler extends TextWebSocketHandler {
         ObjectNode payload = objectMapper.valueToTree(event);
         payload.put("type", "weibo.account.invalid")
                 .put("level", "warning")
-                .put("message", "微博监听账号已失效，已停止使用，请更新Cookie")
+                .put("message", "微博监听账号已停止使用且不会自动恢复，请检查账号并更新Cookie")
                 .put("status", "fail")
                 .putNull("recoverAt");
         TextMessage message;

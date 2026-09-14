@@ -7,6 +7,7 @@ import com.hidewnd.winds.scout.repository.WeiboAccountRepository;
 import com.hidewnd.winds.scout.service.WeiboAccountPoolService;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.util.StringUtils;
 
 import java.time.Clock;
@@ -55,6 +56,7 @@ public class WeiboAccountPoolServiceImpl implements WeiboAccountPoolService {
     public void recordSuccess(String accountId) {
         repository.findById(accountId).ifPresent(account -> {
             account.setStatus("active");
+            account.setFailCount(0);
             account.setRecoverAt(null);
             account.setUpdatedAt(clock.instant());
             repository.save(account);
@@ -66,9 +68,8 @@ public class WeiboAccountPoolServiceImpl implements WeiboAccountPoolService {
         repository.findById(accountId).ifPresent(account -> {
             Instant now = clock.instant();
             boolean invalid = exception instanceof WeiboAccountInvalidException;
-            // 已确认失效的账号不再退避恢复，也不因重复失败反复告警。
-            if ("fail".equals(account.getStatus()) && account.getRecoverAt() == null
-                    && WeiboAccountInvalidException.class.getSimpleName().equals(account.getLastErrorMessage())) {
+            // 永久停用后的重复结果不改写故障时间，补发沿用同一事件供接收端去重。
+            if ("fail".equals(account.getStatus()) && account.getRecoverAt() == null) {
                 return;
             }
             int failCount = account.getFailCount() + 1;
@@ -83,10 +84,26 @@ public class WeiboAccountPoolServiceImpl implements WeiboAccountPoolService {
             });
             account.setUpdatedAt(now);
             repository.save(account);
-            if (invalid) {
+            if (account.getRecoverAt() == null) {
                 eventPublisher.publishEvent(new WeiboAccountInvalidEvent(accountId, now));
             }
         });
+    }
+
+    /**
+     * 持久化的永久停用状态即为待提醒来源；恢复后自然退出补发。
+     * 不依赖订阅博主或在线连接，覆盖全池失效、服务重启及 WS 漏收。
+     * 沿用原失败时间，已成功通知的 Bot 可按账号和时间去重。
+     */
+    @Scheduled(fixedDelay = 240_000L, initialDelay = 10_000L)
+    public void republishUnavailableAccounts() {
+        for (WeiboAccount account : repository.findAll()) {
+            if ("fail".equals(account.getStatus()) && account.getRecoverAt() == null
+                    && account.getLastErrorAt() != null) {
+                eventPublisher.publishEvent(new WeiboAccountInvalidEvent(
+                        account.getId(), account.getLastErrorAt()));
+            }
+        }
     }
 
     private boolean recoverIfDue(WeiboAccount account, Instant now) {

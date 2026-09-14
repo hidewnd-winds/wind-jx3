@@ -24,7 +24,7 @@ public interface WeiboAccountPoolService {
     void recordSuccess(String accountId);
 
     /**
-     * 记录请求失败；登录凭据失效时停用并发布管理告警，其余失败按次数退避恢复。
+     * 记录请求失败；凭据失效或连续三次失败时永久停用并告警，其余失败按次数退避恢复。
      *
      * @param accountId 账号 ID
      * @param exception 本次请求异常
