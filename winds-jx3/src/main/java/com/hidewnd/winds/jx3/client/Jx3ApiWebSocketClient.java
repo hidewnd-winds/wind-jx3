@@ -180,7 +180,10 @@ public class Jx3ApiWebSocketClient {
             if (action != 2001) {
                 return;
             }
-            if (!"1".equals(detail.path("status").textValue())) {
+            var status = detail.path("status");
+            // 开服事件接受整数 1 和已有字符串 "1"，不将小数、布尔值或溢出整数转换为开服。
+            if (!(status.isIntegralNumber() && status.canConvertToInt() && status.intValue() == 1)
+                    && !"1".equals(status.textValue())) {
                 return;
             }
             if (!detail.path("time").isIntegralNumber() || !detail.path("time").canConvertToLong()) {
@@ -200,6 +203,7 @@ public class Jx3ApiWebSocketClient {
             // 协议无 message 字段，兜底展示仅根据原始区服和事件时间生成。
             ServerOpening opening = new ServerOpening(zone, server, time,
                     "[" + Jx3Time.format(time) + "]" + zone + "·" + server + "开服啦！");
+            log.info("收到第三方开服通知，大区={}，服务器={}，事件时间={}", zone, server, Jx3Time.format(time));
             monitor.verifyOpening(opening).whenComplete((ignored, error) -> {
                 if (error != null) {
                     log.error("第三方开服通知处理失败，大区={}，服务器={}，异常类型={}",

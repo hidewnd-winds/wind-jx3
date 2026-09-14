@@ -86,6 +86,18 @@ public class Jx3RecordRepository {
         return true;
     }
 
+    /** 冷启动尚无官方清单时，按通知身份查找已登记的开服时间，避免重复广播。 */
+    public java.time.Instant lastServerOpening(String zone, String server) {
+        var criteria = Criteria.where("state.server.zoneName").is(zone)
+                .and("state.lastOpeningAt").exists(true)
+                .orOperator(Criteria.where("state.server.serverName").is(server),
+                        Criteria.where("state.server.aliases").is(server));
+        Document record = mongo.findOne(Query.query(criteria)
+                .with(Sort.by(Sort.Direction.DESC, "state.lastOpeningAt")), Document.class, COLLECTION);
+        return record == null ? null
+                : Jx3Time.parse(record.get("state", Document.class).getString("lastOpeningAt"));
+    }
+
     private boolean saveArticle(String key, ObjectNode state, Jx3Event event) {
         if (!state.hasNonNull("publishedAt")) {
             throw new IllegalArgumentException("文章缺少有效的官方发布时间");

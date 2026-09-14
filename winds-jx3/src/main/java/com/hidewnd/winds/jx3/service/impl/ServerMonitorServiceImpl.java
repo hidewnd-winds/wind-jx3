@@ -219,7 +219,7 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         states.values().forEach(state -> state.tracker.observe(ProbeStatus.UNKNOWN, clock.instant()));
     }
 
-    /** 网络核验交给共享执行器，WS 回调不等待 TCP 或数据库。 */
+    /** 通知登记交给共享执行器，WS 回调不等待数据库。 */
     @Override
     public CompletableFuture<Void> verifyOpening(ServerOpening opening) {
         if (stopped) {
@@ -256,26 +256,12 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         return task;
     }
 
-    private void verifyOpeningNow(ServerOpening opening) {
-        List<GameServer> snapshot;
-        // 已有有效清单即可立即核验，不等待正在执行的小时刷新。
-        synchronized (this) {
-            if (stopped) {
-                throw new IllegalStateException("开服监听已停止");
-            }
-            snapshot = servers;
+    private synchronized void verifyOpeningNow(ServerOpening opening) {
+        // 只使用已有清单补充身份；没有清单时按通知中的区服登记，不等待官网请求。
+        if (stopped) {
+            throw new IllegalStateException("开服监听已停止");
         }
-        if (snapshot.isEmpty()) {
-            try {
-                snapshot = serverSnapshot();
-            } catch (RuntimeException exception) {
-                log.warn("第三方开服核验无法取得官方清单，异常类型={}；采用第三方通知",
-                        exception.getClass().getSimpleName());
-                publishUnresolvedOpening(opening);
-                return;
-            }
-        }
-        List<GameServer> matches = snapshot.stream()
+        List<GameServer> matches = servers.stream()
                 .filter(server -> server.zoneName().equals(opening.zone())
                         && (server.serverName().equals(opening.server()) || server.aliases().contains(opening.server())))
                 .toList();
@@ -285,63 +271,35 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
             publishUnresolvedOpening(opening);
             return;
         }
-        GameServer server = matches.getFirst();
-        long ticket = sequence.incrementAndGet();
-        synchronized (this) {
-            ServerState state = stateFor(server);
-            if (state.lastOpeningAt != null && !opening.time().isAfter(state.lastOpeningAt)) {
-                return;
-            }
-        }
-        ServerProbeResult result;
-        try {
-            result = probe.check(server);
-        } catch (RuntimeException exception) {
-            log.warn("第三方开服核验异常，服务器={}，异常类型={}；采用第三方通知",
-                    server.serverName(), exception.getClass().getSimpleName());
-            result = new ServerProbeResult(ProbeStatus.UNKNOWN, exception.getClass().getSimpleName(), null, 0);
-        }
-        if (Thread.currentThread().isInterrupted()) {
-            throw new IllegalStateException("开服核验已中断");
-        }
-        acceptOpening(server, opening, result, ticket);
+        acceptOpening(matches.getFirst(), opening);
     }
 
-    private synchronized void acceptOpening(GameServer server, ServerOpening opening, ServerProbeResult result, long ticket) {
+    private synchronized void acceptOpening(GameServer server, ServerOpening opening) {
         if (stopped) {
             throw new IllegalStateException("开服监听已停止");
         }
         ServerState current = stateFor(server);
-        if (ticket < current.sequence
-                || (current.lastOpeningAt != null && !opening.time().isAfter(current.lastOpeningAt))) {
+        if (current.lastOpeningAt != null && !opening.time().isAfter(current.lastOpeningAt)) {
             return;
         }
-        if (result.status() == ProbeStatus.REFUSED) {
-            log.info("第三方开服核验为明确拒绝，服务器={}；不采信开服通知", server.serverName());
-            acceptProbe(server, result, clock.instant(), ticket);
-            return;
-        }
-        boolean verified = result.status() == ProbeStatus.REACHABLE;
-        Jx3Event event = Jx3EventFactory.createServerEvent(UUID.randomUUID().toString(), opening.time(),
-                verified ? clock.instant() : null, server, current.tracker.getConfirmedStatus(), "reachable");
-        if (!verified) {
-            ServerEventData data = (ServerEventData) event.data();
-            event = new Jx3Event(event.type(), event.eventId(), event.occurredAt(), opening.message(),
-                    new ServerEventData(data.zoneId(), data.zoneName(), data.serverName(), data.aliases(),
-                            data.previousStatus(), data.status(), "jx3api", null));
-        }
+        // 三方有效通知直接作为开服依据；TCP 轮询独立继续，不阻塞或否决通知。
+        long ticket = sequence.incrementAndGet();
+        Jx3Event event = new Jx3Event("jx3.server.changed", UUID.randomUUID().toString(),
+                Jx3Time.format(opening.time()), opening.message(),
+                new ServerEventData(server.zoneId(), server.zoneName(), server.serverName(), server.aliases(),
+                        current.tracker.getConfirmedStatus(), "reachable", "jx3api", null));
         var state = mapper.createObjectNode().put("status", "reachable")
                 .put("lastOpeningAt", Jx3Time.format(opening.time()));
         state.set("server", mapper.valueToTree(server));
         boolean inserted = repository.save("server:" + server.zoneId() + ":" + server.serverName(), state, event);
-        // 只有保存成功后推进状态，后续轮询不会重复开服；未知兜底清除旧维护候选。
+        // 保存成功后才推进状态并清除旧维护候选，迟到的旧探测不得覆盖开服通知。
         current.tracker.observe(ProbeStatus.UNKNOWN, clock.instant());
         current.tracker.confirm("reachable");
         current.lastOpeningAt = opening.time();
         current.sequence = ticket;
         if (inserted) {
-            log.info("第三方开服通知已保存，服务器={}，核验结果={}，事件={}",
-                    server.serverName(), result.status(), event.eventId());
+            log.info("第三方开服通知已保存，服务器={}，事件时间={}，事件={}",
+                    server.serverName(), Jx3Time.format(opening.time()), event.eventId());
             publisher.publishEvent(event);
         }
     }
@@ -370,7 +328,7 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         });
     }
 
-    /** 无官方地址也是无法核验；保留第三方区服身份，不伪造官方大区 ID。 */
+    /** 无缓存映射时保留第三方区服身份，不伪造官方大区 ID。 */
     private synchronized void publishUnresolvedOpening(ServerOpening opening) {
         if (stopped) {
             throw new IllegalStateException("开服监听已停止");
@@ -378,6 +336,10 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         String key = "server-unresolved:" + opening.zone() + ":" + opening.server();
         var previous = repository.load(key);
         if (previous != null && !opening.time().isAfter(Jx3Time.parse(previous.path("lastOpeningAt").asText()))) {
+            return;
+        }
+        Instant registered = repository.lastServerOpening(opening.zone(), opening.server());
+        if (registered != null && !opening.time().isAfter(registered)) {
             return;
         }
         var event = new Jx3Event("jx3.server.changed", UUID.randomUUID().toString(), Jx3Time.format(opening.time()),

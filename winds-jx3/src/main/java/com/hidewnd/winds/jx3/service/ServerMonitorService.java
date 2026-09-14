@@ -7,5 +7,6 @@ import java.util.concurrent.CompletableFuture;
 public interface ServerMonitorService {
     void poll();
 
+    /** 优先登记有效三方开服通知并广播，不以 TCP 探测结果作为前置条件。 */
     CompletableFuture<Void> verifyOpening(ServerOpening opening);
 }
