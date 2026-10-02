@@ -62,11 +62,12 @@ public class ArticleMonitorServiceImpl implements ArticleMonitorService {
                             ? null
                             : Jx3EventFactory.createArticleEvent(
                                     UUID.randomUUID().toString(), now, article, previous == null);
-            boolean inserted = store.save(key, state, event);
-            if (inserted && event != null) {
-                publisher.publishEvent(event);
-            }
+            store.save(key, state, event);
         }
         lastSuccess = now;
+        // 未成功发送的事件即使内容没变、已离开官网回看窗口或进程重启，也继续重试。
+        for (Jx3Event event : store.pendingArticleEvents(maintenance)) {
+            publisher.publishEvent(event);
+        }
     }
 }

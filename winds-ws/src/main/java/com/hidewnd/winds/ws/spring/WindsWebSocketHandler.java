@@ -10,8 +10,10 @@ import com.hidewnd.winds.scout.config.ScoutAuthorization;
 import com.hidewnd.winds.scout.config.ScoutManagementTokenAuthenticator;
 import com.hidewnd.winds.scout.service.WeiboSubscriptionService;
 import com.hidewnd.winds.jx3.event.Jx3Event;
+import com.hidewnd.winds.jx3.repository.Jx3RecordRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.web.socket.CloseStatus;
@@ -21,9 +23,11 @@ import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorato
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -36,14 +40,17 @@ public class WindsWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final ScoutManagementTokenAuthenticator managementAuthenticator;
     private final WeiboSubscriptionService subscriptions;
+    private final ObjectProvider<Jx3RecordRepository> jx3Records;
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
     public WindsWebSocketHandler(ObjectMapper objectMapper,
                                  ScoutManagementTokenAuthenticator managementAuthenticator,
-                                 WeiboSubscriptionService subscriptions) {
+                                 WeiboSubscriptionService subscriptions,
+                                 ObjectProvider<Jx3RecordRepository> jx3Records) {
         this.objectMapper = objectMapper;
         this.managementAuthenticator = managementAuthenticator;
         this.subscriptions = subscriptions;
+        this.jx3Records = jx3Records;
     }
 
     @Override
@@ -148,7 +155,32 @@ public class WindsWebSocketHandler extends TextWebSocketHandler {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("剑三消息序列化失败", exception);
         }
-        int sent = sendToSessions(message);
+        int sent;
+        if (event.type().equals("jx3.news.updated") || event.type().equals("jx3.maintenance.updated")) {
+            String articleId = objectMapper.valueToTree(event.data()).path("articleId").asText();
+            if (articleId.isBlank()) {
+                throw new IllegalArgumentException("文章推送缺少文章 ID");
+            }
+            String key = (event.type().equals("jx3.news.updated") ? "news:" : "maintenance:") + articleId;
+            Jx3RecordRepository records = jx3Records.getObject();
+            String token = UUID.randomUUID().toString();
+            if (!records.claimArticlePush(key, token, Instant.now())) {
+                return;
+            }
+            sent = 0;
+            try {
+                // 至少一个连接写入成功才标记成功；无连接或全部失败保留待重试状态。
+                for (Map.Entry<String, WebSocketSession> entry : sessions.entrySet()) {
+                    if (send(entry.getKey(), entry.getValue(), message)) {
+                        sent++;
+                    }
+                }
+            } finally {
+                records.finishArticlePush(key, token, sent > 0, Instant.now());
+            }
+        } else {
+            sent = sendToSessions(message);
+        }
         log.info("WebSocket剑三广播完成，类型={}，事件={}，成功发送数={}", event.type(), event.eventId(), sent);
     }
 

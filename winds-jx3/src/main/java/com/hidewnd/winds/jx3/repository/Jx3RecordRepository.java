@@ -13,6 +13,11 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+
 /** 文章按身份唯一保存，其他状态保留修订；业务数据和事件同文档原子写入。 */
 public class Jx3RecordRepository {
     private static final String COLLECTION = "jx3_records";
@@ -54,7 +59,8 @@ public class Jx3RecordRepository {
                 return null;
             }
             ObjectNode state = mapper.valueToTree(article);
-            state.remove(java.util.List.of("_id", "recordedAt", "event"));
+            state.remove(List.of("_id", "recordedAt", "event", "pushPending", "pushedAt",
+                    "pushClaimToken", "pushClaimUntil"));
             return state;
         }
         Document record = latest(key);
@@ -107,11 +113,49 @@ public class Jx3RecordRepository {
         // _id 唯一索引约束文章身份，内容变化只更新原记录，不再新增修订。
         Update update = new Update();
         Document.parse(state.toString()).forEach(update::set);
-        update.set(
-                "event",
-                event == null ? null : Document.parse(mapper.valueToTree(event).toString()));
+        // 首轮基线不能清除上次进程留下的待发送事件；内容变化也不能清除成功标记。
+        if (event != null && !articlePushed(key)) {
+            update.set("event", Document.parse(mapper.valueToTree(event).toString()));
+            update.set("pushPending", true);
+        }
         update.setOnInsert("recordedAt", Jx3Time.format(java.time.Instant.now()));
         var result = mongo.upsert(Query.query(Criteria.where("_id").is(key)), update, ARTICLES);
         return result.getUpsertedId() != null || result.getModifiedCount() > 0;
+    }
+
+    private boolean articlePushed(String key) {
+        return mongo.exists(Query.query(Criteria.where("_id").is(key).and("pushedAt").ne(null)), ARTICLES);
+    }
+
+    public List<Jx3Event> pendingArticleEvents(boolean maintenance) {
+        // 独立于官网回看窗口重试，且不把历史上仅保存过的事件误认作待发送或发送成功。
+        Query query = Query.query(Criteria.where("pushPending").is(true).and("pushedAt").is(null)
+                .and("event.type").is(maintenance ? "jx3.maintenance.updated" : "jx3.news.updated"))
+                .with(Sort.by(Sort.Direction.ASC, "recordedAt")).limit(100);
+        return mongo.find(query, Document.class, ARTICLES).stream()
+                .map(record -> mapper.convertValue(record.get("event"), Jx3Event.class))
+                .toList();
+    }
+
+    public boolean claimArticlePush(String key, String token, Instant now) {
+        // 同一文章的不同事件也共用数据库占用，避免异步监听或多实例同时发送。
+        Criteria available = Criteria.where("_id").is(key).and("pushedAt").is(null)
+                .orOperator(Criteria.where("pushClaimUntil").is(null),
+                        Criteria.where("pushClaimUntil").lte(Date.from(now)));
+        Update claim = new Update().set("pushClaimToken", token)
+                .set("pushClaimUntil", Date.from(now.plus(Duration.ofMinutes(5))));
+        return mongo.updateFirst(Query.query(available), claim, ARTICLES).getModifiedCount() == 1;
+    }
+
+    public void finishArticlePush(String key, String token, boolean sent, Instant now) {
+        Update result = new Update().unset("pushClaimToken").unset("pushClaimUntil");
+        if (sent) {
+            result.set("pushedAt", Date.from(now)).unset("pushPending");
+        }
+        var updated = mongo.updateFirst(
+                Query.query(Criteria.where("_id").is(key).and("pushClaimToken").is(token)), result, ARTICLES);
+        if (updated.getMatchedCount() != 1) {
+            throw new IllegalStateException("文章推送占用已失效，无法确认发送结果：" + key);
+        }
     }
 }
