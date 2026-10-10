@@ -2,7 +2,6 @@ package com.hidewnd.winds.scout.model;
 
 import com.hidewnd.winds.scout.config.ScoutMongoTimeConverter;
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
@@ -18,7 +17,6 @@ import java.util.List;
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 @Document(collection = "weibo_account_pool")
 @Schema(description = "微博抓取账号持久化实体")
 public class WeiboAccount {
@@ -65,6 +63,16 @@ public class WeiboAccount {
     @Schema(description = "按域、路径和有效期维护的完整 Cookie 状态", accessMode = Schema.AccessMode.WRITE_ONLY)
     private List<WeiboCookie> cookies;
 
+    // 选取和管理变更生成新版本，迟到的请求不能覆盖新凭据或重复结束恢复轮次。
+    private long successGeneration;
+    private String pendingPoolRecovery;
+    private Long requestLeaseUntil;
+    private String stateVersion;
+    private String recoveryAttemptId;
+    @ValueConverter(ScoutMongoTimeConverter.class)
+    private Instant lastSuccessAt;
+    private List<com.hidewnd.winds.scout.event.WeiboAlertEvent> pendingAlerts;
+
     public WeiboAccount(
             String id,
             String cookie,
@@ -78,8 +86,18 @@ public class WeiboAccount {
             Instant recoverAt,
             Instant createdAt,
             Instant updatedAt) {
-        this(id, cookie, xsrfToken, status, failCount, requestCount, lastErrorAt, lastErrorMessage,
-                lastUsedAt, recoverAt, createdAt, updatedAt, null);
+        this.id = id;
+        this.cookie = cookie;
+        this.xsrfToken = xsrfToken;
+        this.status = status;
+        this.failCount = failCount;
+        this.requestCount = requestCount;
+        this.lastErrorAt = lastErrorAt;
+        this.lastErrorMessage = lastErrorMessage;
+        this.lastUsedAt = lastUsedAt;
+        this.recoverAt = recoverAt;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
     }
 
     public WeiboAccount(String id, String cookie, String xsrfToken) {

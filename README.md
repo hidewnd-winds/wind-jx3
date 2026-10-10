@@ -141,7 +141,7 @@ ws://localhost:9002/ws?token=<WS_TOKEN>
 - `connection.success`：连接建立成功。
 - `huangli.updated`：黄历图片更新。
 - `weibo.updated`：仅推送当前 Token 已订阅博主的微博动态。
-- `weibo.account.invalid`：仅向当前有微博管理权限的连接推送账号失效预警。
+- `weibo.account.invalid`、`weibo.account.recovery_failed`、`weibo.pool.unavailable`：仅向当前有微博管理权限的连接推送账号失效、恢复失败及账号池不可用预警。告警持久化，管理客户端通过 `/scout/weibo/alerts` 补拉并在本地保存后确认接收；确认不表示超管私聊已送达。
 - `jx3.news.updated`、`jx3.maintenance.updated`、`jx3.server.changed`、`jx3.patch.updated`：剑三官方数据变化。
 
 微博和剑三事件的日期时间统一为北京时间 `yyyy-MM-dd HH:mm:ss`。

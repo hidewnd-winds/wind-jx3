@@ -105,15 +105,16 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
             latest = fetchService.fetchLatest(
                     blogger.getUid(), blogger.getScreenName(), account);
         } catch (WeiboCookieUpdateException exception) {
+            accountPool.releaseAccount(account);
             log.warn("微博Cookie状态更新失败，uid={}，accountId={}",
                     blogger.getUid(), account.getId(), exception);
             return;
         } catch (Exception exception) {
-            accountPool.recordFailure(account.getId(), exception);
+            accountPool.recordFailure(account, exception);
             log.warn("微博请求失败，uid={}", blogger.getUid(), exception);
             return;
         }
-        accountPool.recordSuccess(account.getId());
+        accountPool.recordSuccess(account);
         if (latest.isEmpty()) {
             log.info("微博监听未获取到有效内容，uid={}", blogger.getUid());
             return;

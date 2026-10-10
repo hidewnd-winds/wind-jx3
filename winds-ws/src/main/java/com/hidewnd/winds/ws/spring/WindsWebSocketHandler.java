@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hidewnd.winds.bot.huangli.event.HuangliUpdatedEvent;
 import com.hidewnd.winds.scout.event.WeiboUpdatedEvent;
-import com.hidewnd.winds.scout.event.WeiboAccountInvalidEvent;
+import com.hidewnd.winds.scout.event.WeiboAlertEvent;
 import com.hidewnd.winds.scout.config.ScoutAuthorization;
 import com.hidewnd.winds.scout.config.ScoutManagementTokenAuthenticator;
 import com.hidewnd.winds.scout.service.WeiboSubscriptionService;
@@ -185,17 +185,12 @@ public class WindsWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
-     * 账号失效告警只发送给当前仍有管理权限的在线连接，不缓存握手时的权限快照。
+     * 微博管理告警只发送给当前仍有管理权限的在线连接，不缓存握手时的权限快照。
      */
     @EventListener
     @Async
-    public void broadcast(WeiboAccountInvalidEvent event) {
+    public void broadcast(WeiboAlertEvent event) {
         ObjectNode payload = objectMapper.valueToTree(event);
-        payload.put("type", "weibo.account.invalid")
-                .put("level", "warning")
-                .put("message", "微博监听账号已失效，已停止使用，请更新Cookie")
-                .put("status", "fail")
-                .putNull("recoverAt");
         TextMessage message;
         try {
             message = new TextMessage(objectMapper.writeValueAsString(payload));
@@ -226,7 +221,7 @@ public class WindsWebSocketHandler extends TextWebSocketHandler {
                 sent++;
             }
         }
-        log.info("WebSocket微博账号失效告警完成，accountId={}，成功发送数={}", event.accountId(), sent);
+        log.info("WebSocket微博告警完成，eventId={}，成功发送数={}", event.eventId(), sent);
     }
 
     private int sendToSessions(TextMessage message) {

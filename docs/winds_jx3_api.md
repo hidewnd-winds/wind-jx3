@@ -43,6 +43,9 @@
 | 3.4 | PUT | `/scout/weibo/accounts/{id}/credentials` | 管理 Token | 更新抓取账号凭据 |
 | 3.5 | PATCH | `/scout/weibo/accounts/{id}/status` | 管理 Token | 修改抓取账号状态 |
 | 3.6 | DELETE | `/scout/weibo/accounts/{id}` | 管理 Token | 删除抓取账号 |
+| 3.7 | GET | `/scout/weibo/alerts` | 管理 Token | 分批补拉当前 Token 未确认的告警 |
+| 3.8 | GET | `/scout/weibo/alerts/{id}` | 管理 Token | 告警快照与当前恢复状态 |
+| 3.9 | POST | `/scout/weibo/alerts/{id}/ack` | 管理 Token | 确认已持久化接收告警 |
 | 4.1 | POST | `/costing/one` | 无 | 查询单个技艺制品成本 |
 | 4.2 | POST | `/costing/list` | 无 | 查询多个技艺制品成本 |
 | 4.3 | POST | `/proxy/jx3api` | 无 | 代理调用 JX3API |
@@ -1395,6 +1398,8 @@ Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 | huangli.updated | 全部在线连接 | 5.4 |
 | weibo.updated | 当前 Token 有效且订阅对应 UID 的在线连接 | 5.5 |
 | weibo.account.invalid | 当前仍含 scout.weibo.manage 权限的在线连接 | 5.6 |
+| weibo.account.recovery_failed | 当前仍含 scout.weibo.manage 权限的在线连接 | 5.6 |
+| weibo.pool.unavailable | 当前仍含 scout.weibo.manage 权限的在线连接 | 5.6 |
 | jx3.news.updated | 全部在线连接 | 5.7 |
 | jx3.maintenance.updated | 全部在线连接 | 5.8 |
 | jx3.server.changed | 全部在线连接 | 5.9 |
@@ -1402,7 +1407,7 @@ Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 
 以下均为服务端主动消息，无对应的客户端请求参数。客户端无需发送订阅帧，微博订阅通过 HTTP 接口维护。订阅变更无需重连，影响后续推文分发；同一 Token 的多个在线连接均可收到消息。
 
-推送只覆盖当前服务实例在线连接，不提供离线补发、逐客户端确认或跨实例转发。微博首次监听只建立基线，服务重启不补发历史推文，同一推文 ID 不重复推送；剑三首次采集只建立基线，不补发停机期间变化。
+WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另有持久化补拉和按管理 Token 的接收确认接口，支持重连、跨服务实例读取；其他事件不因此获得离线补发或客户端确认能力。微博首次监听只建立基线，服务重启不补发历史推文，同一推文 ID 不重复推送；剑三首次采集只建立基线，不补发停机期间变化。
 
 剑三新闻和公告默认每轮完成后间隔 30 秒，区服探测间隔 10 秒，补丁间隔 30 秒；实际周期还包含本轮执行耗时。采集任务统一交给应用异步执行器，调度器只触发任务；同一来源不会重叠执行。区服按网关探测完成顺序处理，仍需连续两次明确结果确认变化。
 
@@ -1604,35 +1609,36 @@ Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 
 **说明：** 管理 Token 同样必须订阅该 UID 才能接收。content 为纯文本，rawContent 为不可信上游 HTML；不要直接执行其中脚本。资源 URL 保留签名参数。retweet.retweet 递归使用相同转发结构，最多五层；原文不可访问时 unavailable=true，身份或内容字段可能为空。
 
-### 5.6 微博账号失效预警（weibo.account.invalid）
+### 5.6 微博管理告警与可靠补拉
 
-#### 消息参数
+三类事件共用脱敏快照。`weibo.account.invalid` 保留原事件类型；新增 `weibo.account.recovery_failed` 和 `weibo.pool.unavailable`。以下字段位于 WS 顶层，HTTP 响应位于 `R.obj` 顶层。
 
-| 字段 | 类型 | 可空 | 说明 |
-| --- | --- | --- | --- |
-| type | string | 否 | 固定 weibo.account.invalid |
-| level | string | 否 | 固定 warning |
-| message | string | 否 | 固定“微博监听账号已失效，已停止使用，请更新Cookie” |
-| accountId | string | 否 | 失效的抓取账号 ID，不是被订阅博主的 UID |
-| status | string | 否 | 固定 fail |
-| recoverAt | null | 是 | 固定 null，不自动恢复 |
-| occurredAt | string | 否 | 确认失效的时间，北京时间 yyyy-MM-dd HH:mm:ss |
+| 字段 | 说明 |
+| --- | --- |
+| eventId / incidentId | 稳定事件 ID / 故障或恢复轮次 ID；重投不改变 |
+| type / level / message | 事件类型、warning、脱敏说明 |
+| occurredAt | 首次记录故障的北京时间，yyyy-MM-dd HH:mm:ss |
+| accountId | 账号告警为账号 ID；账号池告警为 null |
+| status / recoverAt / failCount | 发生时的账号状态、恢复时间及失败次数 |
+| totalCount / waitingCount / stoppedCount | 账号池总数、等待恢复或验证数、停用数；账号级事件为 0 |
+| earliestRecoverAt | 账号池最早可重试时间；没有时为 null |
+| reason | 脱敏原因：first_detection、no_usable_accounts、credentials_invalid 或异常类名 |
+| successGeneration | 发生时成功代数，用于区分同一秒内的成功与后续故障；客户端可忽略 |
+| currentState / resolvedAt | 仅 HTTP：unavailable、pending_verification、recovered、deleted；最近确认成功时间可空 |
 
-#### 消息示例
+**触发规则：** 普通失败继续使用累计失败 1 小时、3 小时退避，第 3 次不再自动恢复。仅实际选中的到期账号进入恢复轮次，其首次有效请求再次失败立即预警；明确登录失效仍立即停用，恢复期间失效合并成恢复失败告警。全部账号暂时不可用也开启账号池故障；同次中断只告警一次，真实请求成功后才结束。首次运行发现存量全停用账号会生成一次 first_detection 告警，不倒推历史恢复失败。Cookie 保存错误不计入账号请求失败。同一账号的完整抓取链串行占用，租约最长 10 分钟；进程中断后到期可重新选取，迟到结果不能覆盖新版本。
 
-```json
-{
-  "type": "weibo.account.invalid",
-  "level": "warning",
-  "message": "微博监听账号已失效，已停止使用，请更新Cookie",
-  "accountId": "account-1",
-  "status": "fail",
-  "recoverAt": null,
-  "occurredAt": "2026-09-09 10:00:00"
-}
-```
+**`GET /scout/weibo/alerts?limit=100`**：读取当前管理 Token 尚未确认的事件，`limit` 为 1–100，默认 100，`obj` 为数组，按发生时间和事件 ID 排序。客户端每批先持久化再逐条 ACK，下一轮继续读取剩余事件；没有事件返回空数组。
 
-**说明：** 仅账号失效状态保存成功后发送。重复失效不反复告警；不包含 Cookie、XSRF Token 等凭据。
+**`GET /scout/weibo/alerts/{id}`**：返回完整事件及当前恢复状态。恢复状态按成功代数判定，不将时间到期或人工更新凭据当作请求成功。无法取得可靠状态时返回错误，客户端不得伪造已恢复。
+
+**`POST /scout/weibo/alerts/{id}/ack`**：幂等确认当前 Token 已持久化接收该事件，返回 `R.success`。身份来自现有鉴权，不能替其他 Token 确认；确认身份以摘要保存，不保存令牌明文。不存在的事件返回 404，未授权和非管理 Token 仍分别返回 401/403。
+
+所有告警先与状态变更原子保存，再幂等转存至告警日志；未完成转存每 60 秒重试。WebSocket 仅负责实时通知，HTTP 接收确认与平台私聊回执分开，未确认事件不会因 WS 写入成功消失。删除账号前必须完成待保存告警和恢复标记转存，否则返回 409；管理和请求并发导致状态版本变化时，管理更新返回 409。
+
+机器人先持久化接收再 ACK，独立保存每个 Bot/超管的投递进度；启动、重连和每 60 秒补拉，私聊失败、离线或未建立 QQ 私聊路由时保留待发。QQ 路由只由通过现有权限校验的私聊管理命令登记，重启后可恢复。发送前再次核对超管权限并读取当前故障状态；已恢复的历史事件仍补发并注明已恢复，更新凭据或到期可重试显示待请求验证。平台已接收但本地回执尚未保存便崩溃时可能重复，语义为至少一次投递。
+
+**兼容上线：** 先部署机器人消费者，再部署服务端。旧 `weibo.account.invalid` 消息仍能消费；新接口尚不存在时机器人记录版本不匹配，继续处理已有本地告警。旧账号缺少状态版本和成功代数时按初始状态读取，不要求批量改写；本次不回填历史恢复失败事件、不自动清除未确认告警。
 
 ### 5.7 剑三新闻（jx3.news.updated）
 

@@ -33,9 +33,9 @@ public class WeiboAccountCookieRepository {
                 // 使用实体属性名，让 Mongo 字段转换器同时处理时间格式与字段映射。
                 .set("updatedAt", account.getUpdatedAt());
         UpdateResult result = mongoTemplate.updateFirst(
-                Query.query(Criteria.where("_id").is(account.getId())), update, WeiboAccount.class);
+                Query.query(Criteria.where("_id").is(account.getId()).and("stateVersion").is(account.getStateVersion())), update, WeiboAccount.class);
         if (result.getMatchedCount() == 0) {
-            throw new IllegalStateException("微博账号不存在，无法保存Cookie状态");
+            throw new IllegalStateException("微博账号不存在或状态版本已变化，无法保存Cookie状态");
         }
     }
 }

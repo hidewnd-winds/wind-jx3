@@ -64,16 +64,17 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
                 found = fetch.findUidByScreenName(request.screenName(), account);
             } catch (ScoutApiException exception) {
                 // 匹配歧义是查询结果，不应停用正常账号。
-                pool.recordSuccess(account.getId());
+                pool.recordSuccess(account);
                 throw exception;
             } catch (WeiboCookieUpdateException exception) {
+                pool.releaseAccount(account);
                 throw exception;
             } catch (RuntimeException exception) {
-                pool.recordFailure(account.getId(), exception);
+                pool.recordFailure(account, exception);
                 throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博用户查询失败");
             }
             if (found.isEmpty()) {
-                pool.recordSuccess(account.getId());
+                pool.recordSuccess(account);
                 throw new ScoutApiException(HttpStatus.NOT_FOUND, "未找到全称匹配的微博博主，请使用UID");
             }
             uid = found.get();
@@ -82,21 +83,23 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
         try {
             profile = fetch.fetchUserProfile(uid, account);
         } catch (WeiboCookieUpdateException exception) {
+            pool.releaseAccount(account);
             throw exception;
         } catch (RuntimeException exception) {
-            pool.recordFailure(account.getId(), exception);
+            pool.recordFailure(account, exception);
             throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博博主资料查询失败");
         }
         Optional<WeiboPost> baseline;
         try {
             baseline = fetch.fetchLatest(uid, profile.screenName(), account);
         } catch (WeiboCookieUpdateException exception) {
+            pool.releaseAccount(account);
             throw exception;
         } catch (RuntimeException exception) {
-            pool.recordFailure(account.getId(), exception);
+            pool.recordFailure(account, exception);
             throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博基线查询失败");
         }
-        pool.recordSuccess(account.getId());
+        pool.recordSuccess(account);
         // 先保存不推送的基线，再让新订阅进入轮询；数据库故障不计入抓取账号失败。
         // 无有效推文时不创建虚假基线，保留轮询首次抓取的既有处理。
         if (baseline.isPresent()) {
@@ -145,12 +148,13 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
         try {
             latest = fetch.fetchLatest(uid, screenName, account);
         } catch (WeiboCookieUpdateException exception) {
+            pool.releaseAccount(account);
             throw exception;
         } catch (RuntimeException exception) {
-            pool.recordFailure(account.getId(), exception);
+            pool.recordFailure(account, exception);
             throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博推文查询失败");
         }
-        pool.recordSuccess(account.getId());
+        pool.recordSuccess(account);
         WeiboPost post = latest.orElseThrow(() -> new ScoutApiException(HttpStatus.NOT_FOUND, "暂无有效微博推文"));
         // 按需补录只供查询，不产生监听事件；入库失败必须向调用者报告失败。
         posts.saveOrSync(post, true);
