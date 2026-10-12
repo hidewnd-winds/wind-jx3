@@ -1,6 +1,7 @@
 package com.hidewnd.winds.scout.repository;
 
 import com.hidewnd.winds.scout.model.WeiboAccount;
+import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -22,6 +23,12 @@ public class WeiboAccountStateRepository {
     }
 
     public WeiboAccount update(WeiboAccount expected, Update update) {
+        Document unset = update.getUpdateObject().get("$unset", Document.class);
+        if (unset != null) {
+            // Spring Data 4.3 会把 $unset 的整数占位值也交给字段时间转换器。
+            // $unset 忽略操作数，改用 null 避免类型误转换；仍删除字段，不写入 null 字段。
+            unset.replaceAll((field, operand) -> null);
+        }
         return mongo.findAndModify(Query.query(Criteria.where("_id").is(expected.getId())
                         .and("stateVersion").is(expected.getStateVersion())), update,
                 FindAndModifyOptions.options().returnNew(true), WeiboAccount.class);

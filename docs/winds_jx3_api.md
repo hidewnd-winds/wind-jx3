@@ -1743,14 +1743,14 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 | occurredAt | string | 否 | 首次观察到变化的北京时间，不是官方发布时间 |
 | message | string | 否 | 可直接展示的纯文本，可能包含换行 |
 | data | object | 否 | 此类事件的业务载荷 |
-| data.zoneId | string | 否 | 大区 ID |
+| data.zoneId | string | 是 | 大区 ID；第三方通知尚无官方清单映射时为 null |
 | data.zoneName | string | 否 | 大区名称 |
 | data.serverName | string | 否 | 服务器名称 |
 | data.aliases | string[] | 否 | 同组其他服务器名称，无别名为 [] |
-| data.previousStatus | string | 否 | 变化前状态：reachable / unreachable |
+| data.previousStatus | string | 是 | 变化前状态：reachable / unreachable；第三方首次通知时可为 null |
 | data.status | string | 否 | 变化后状态：reachable / unreachable |
-| data.detectedBy | string | 否 | 固定 tcp |
-| data.confirmedAt | string | 否 | 满足确认条件的北京时间，可能晚于 occurredAt |
+| data.detectedBy | string | 否 | tcp 为直连探测确认，jx3api 为第三方开服通知 |
+| data.confirmedAt | string | 是 | TCP 满足确认条件的北京时间；第三方通知为 null |
 
 #### 消息示例
 
@@ -1776,6 +1776,10 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 ```
 
 **说明：** TCP 可达不保证玩家一定能进入游戏；超时不会直接作为关服消息。不可达文案为“[HH:mm:ss]服务器名暂时无法连接，可能维护中。”。
+
+开服辅助通道默认连接 `wss://socket.nicemoe.cn`，由 `winds.jx3.socket.enabled` 控制启用，连接失败自动重连并维持心跳。只处理 `action=2001` 且 `status=success` 的开服事件；`detail.status` 接受整数 `1` 或字符串 `"1"`。有效通知直接登记并广播，不以 TCP 成功为前置条件；超过十分钟或超过当前时间一分钟的通知被丢弃。同一区服已登记的开服时间用于重连、重启及 TCP/第三方来源之间的去重。
+
+比赛专区的“练习专用服”和“比赛专用服”在官方清单解析和第三方通知入口均被排除，不进行探测、不登记开服事件。首次 TCP 采集仍只建立基线，不补发停机期间变化。
 
 ### 5.10 剑三更新包（jx3.patch.updated）
 

@@ -7,6 +7,7 @@ import com.hidewnd.winds.jx3.model.ServerProbeResult;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.Locale;
@@ -26,7 +27,8 @@ public class TcpServerProbe {
 
     public ServerProbeResult check(GameServer server) {
         long started = System.nanoTime();
-        try (Socket socket = new Socket()) {
+        // 网关探测必须直连，避免 JVM SOCKS/ProxySelector 让探测与 nc 使用不同路径。
+        try (Socket socket = new Socket(Proxy.NO_PROXY)) {
             socket.connect(new InetSocketAddress(server.host(), server.port()), timeoutMillis);
             return new ServerProbeResult(
                     ProbeStatus.REACHABLE,

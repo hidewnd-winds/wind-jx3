@@ -7,8 +7,10 @@ public class ServerStateTracker {
     private String confirmedStatus;
     private ProbeStatus candidate;
     private Instant firstObservedAt;
+    private ProbeStatus lastProbeStatus;
 
     public ServerTransition observe(ProbeStatus result, Instant now) {
+        lastProbeStatus = result;
         if (result == ProbeStatus.UNKNOWN) {
             candidate = null;
             return null;
@@ -30,6 +32,10 @@ public class ServerStateTracker {
 
     public String getConfirmedStatus() {
         return confirmedStatus;
+    }
+
+    public ProbeStatus getLastProbeStatus() {
+        return lastProbeStatus;
     }
 
     public void confirm(String status) {

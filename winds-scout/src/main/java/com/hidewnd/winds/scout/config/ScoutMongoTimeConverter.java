@@ -24,6 +24,7 @@ public class ScoutMongoTimeConverter implements MongoValueConverter<Instant, Str
 
     @Override
     public String write(Instant value, MongoConversionContext context) {
-        return FORMATTER.format(value);
+        // 查询/局部更新映射会直接传入 null（例如停止自动恢复），不会调用 writeNull。
+        return value == null ? null : FORMATTER.format(value);
     }
 }

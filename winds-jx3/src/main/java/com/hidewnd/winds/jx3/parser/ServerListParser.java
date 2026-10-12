@@ -13,6 +13,7 @@ public final class ServerListParser {
 
     public static List<GameServer> parse(String text) {
         Map<String, List<String[]>> groups = new LinkedHashMap<>();
+        boolean hasServer = false;
         for (String line : text.split("\\R")) {
             if (line.isBlank()) {
                 continue;
@@ -27,10 +28,15 @@ public final class ServerListParser {
             if (port < 1 || port > 65535 || fields[9].isBlank() || fields[10].isBlank()) {
                 throw new IllegalArgumentException("区服地址或标识无效");
             }
+            hasServer = true;
+            // 在地址合并前排除专用服，避免其成为同地址主服或混入普通服别名。
+            if (GameServer.excludedFromMonitoring(fields[11], fields[10])) {
+                continue;
+            }
             groups.computeIfAbsent(fields[3] + ":" + fields[4], ignored -> new ArrayList<>())
                     .add(fields);
         }
-        if (groups.isEmpty()) {
+        if (!hasServer) {
             throw new IllegalArgumentException("区服清单为空");
         }
         List<GameServer> result = new ArrayList<>();

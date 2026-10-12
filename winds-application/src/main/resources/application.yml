@@ -53,4 +53,10 @@ winds:
     news-interval: 30s
     maintenance-interval: 30s
     server-interval: 10s
+    server-connect-timeout: 3s
     patch-interval: 30s
+    socket:
+      enabled: true
+      endpoint: wss://socket.nicemoe.cn
+      reconnect-interval: 15s
+      heartbeat-timeout: 45s

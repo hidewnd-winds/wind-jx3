@@ -13,4 +13,10 @@ public record GameServer(
     public String endpoint() {
         return host + ":" + port;
     }
+
+    /** 清单探测和第三方通知共用同一排除规则。 */
+    public static boolean excludedFromMonitoring(String zone, String server) {
+        return "比赛专区".equals(zone)
+                && ("练习专用服".equals(server) || "比赛专用服".equals(server));
+    }
 }
