@@ -85,6 +85,27 @@ wind-jx3/
 
 不要将真实密码、AccessKey、Token 或 Cookie 提交到版本控制。
 
+### MongoDB 连接维护
+
+所有模块通过 Spring 管理的共享 `MongoClient` / `MongoTemplate` 使用 MongoDB 官方驱动连接池。驱动负责连接复用、心跳、故障连接淘汰及按需重建，Spring 在应用关闭时关闭客户端；业务代码不单独创建客户端或额外包装连接池。
+
+地址、数据库和认证继续使用 `spring.data.mongodb`。连接池及超时统一使用 `winds.mongodb`，这些设置优先于连接 URI 中的同名驱动选项，可通过环境变量覆盖，例如 `WINDS_MONGODB_READTIMEOUT=60s`。
+
+| 配置项（`winds.mongodb.*`） | 默认值 | 含义 |
+| --- | --- | --- |
+| `min-pool-size` / `max-pool-size` | `2` / `100` | 每台 MongoDB 服务器连接池的最小保有量和容量上限 |
+| `max-connecting` | `2` | 每个池同时建立连接的上限 |
+| `max-wait-time` | `10s` | 等待空闲连接或建连许可的上限 |
+| `max-connection-idle-time` | `5m` | 空闲连接回收阈值 |
+| `maintenance-frequency` | `30s` | 驱动后台连接池维护间隔 |
+| `server-selection-timeout` | `5s` | 等待可用 MongoDB 服务器的上限 |
+| `connect-timeout` | `5s` | 建立 TCP 连接的超时 |
+| `read-timeout` | `30s` | 业务连接等待网络读取的超时，避免无限占用连接或建连许可 |
+
+上述超时分别约束各阶段，不是整个请求的总时限；驱动重试可能增加总耗时。读取超时不能证明写入未发生，也不保证服务端操作已取消；不要据此无条件重试非幂等写入。超时和维护间隔必须为正数，最小连接数允许为零且不得大于容量上限。
+
+连接池故障仍需结合 MongoDB 服务端日志、应用线程栈和网络情况定位。仅提高容量或重启应用不能证明根因已解决。项目保留 Actuator 的 MongoDB 连接池指标监听器，不额外开放管理端点。
+
 ### 构建与启动
 
 Windows PowerShell：

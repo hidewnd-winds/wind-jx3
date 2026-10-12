@@ -35,8 +35,19 @@ springdoc:
         - com.hidewnd.winds.bot.huangli.controller
         - com.hidewnd.winds.scout.controller
 
-# 单实例官方数据监听；只向在线 WebSocket 客户端广播。
 winds:
+  # 所有模块共用官方驱动连接池；地址、认证仍使用 spring.data.mongodb。
+  mongodb:
+    min-pool-size: 2
+    max-pool-size: 100
+    max-connecting: 2
+    max-wait-time: 10s
+    max-connection-idle-time: 5m
+    maintenance-frequency: 30s
+    server-selection-timeout: 5s
+    connect-timeout: 5s
+    read-timeout: 30s
+  # 单实例官方数据监听；只向在线 WebSocket 客户端广播。
   jx3:
     enabled: true
     news-interval: 30s

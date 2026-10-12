@@ -1362,6 +1362,8 @@ Sec-WebSocket-Version: 13
 
 客户端库会自动处理 Upgrade 等协议头；业务侧只需设置地址和 Token。浏览器原生 WebSocket 不能自定义 Authorization 时使用 URL Token。无效 Token 拒绝握手，HTTP 状态为 401，不会收到 connection.success。
 
+鉴权存储访问失败（例如 MongoDB 连接池等待超时）时拒绝握手，HTTP 状态为 503，不会建立 WebSocket 会话。客户端应退避重试；503 不表示 Token 无效。
+
 #### 响应参数
 
 | 项目 | 位置 | 说明 |
