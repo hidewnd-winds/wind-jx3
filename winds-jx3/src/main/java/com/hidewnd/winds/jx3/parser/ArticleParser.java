@@ -6,6 +6,7 @@ import com.hidewnd.winds.jx3.support.Jx3Time;
 
 import org.jsoup.Jsoup;
 
+import java.net.URI;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -47,10 +48,13 @@ public final class ArticleParser {
     public static Article parse(JsonNode node, String content, boolean maintenance) {
         String id = node.path("id").asText();
         String title = toPlainText(node.path("title").asText());
-        if (id.isBlank() || title.isBlank()) {
-            throw new IllegalArgumentException("公告缺少标识或标题");
+        if (!id.matches("\\d+") || title.isBlank()) {
+            throw new IllegalArgumentException("公告标识无效或缺少标题");
         }
         String category = node.path("catid").asText();
+        if (!category.matches("\\d+")) {
+            throw new IllegalArgumentException("公告栏目标识无效");
+        }
         String published = parseTimestamp(node.get("inputtime"));
         if (published == null) {
             published = parseTimestamp(node.get("asktime"));
@@ -64,13 +68,7 @@ public final class ArticleParser {
         if (description == null) {
             description = summarize(body);
         }
-        String url =
-                category.equals("0")
-                        ? "https://kefu.xoyo.com/?game_name=jx3&id=" + id + "&r=gonggao"
-                        : node.path("url").asText();
-        if (url.isBlank()) {
-            url = "https://jx3.xoyo.com/show-" + category + "-" + id + "-1.html";
-        }
+        String url = articleUrl(node.path("url").asText(), category, id);
         String status = "unknown";
         String starts = null;
         String ends = null;
@@ -146,6 +144,25 @@ public final class ArticleParser {
                 status,
                 starts,
                 ends);
+    }
+
+    private static String articleUrl(String suppliedUrl, String category, String id) {
+        // 上游可能返回客服、旧版或外部链接；只接受官网 HTTPS 的 /index/ 页面。
+        try {
+            URI uri = URI.create(suppliedUrl);
+            String path = uri.getRawPath();
+            if ("https".equals(uri.getScheme())
+                    && "jx3.xoyo.com".equals(uri.getRawAuthority())
+                    && path != null && path.startsWith("/index/")
+                    && !path.contains("%")
+                    && path.equals(uri.normalize().getRawPath())) {
+                return suppliedUrl;
+            }
+        } catch (IllegalArgumentException ignored) {
+            // 非法 URL 与旧版链接一样，按已验证的栏目和文章 ID 构造官网详情入口。
+        }
+        return "https://jx3.xoyo.com/index/index.html#/article-details?"
+                + (category.equals("0") ? "kid=" + id : "catid=" + category + "&id=" + id);
     }
 
     public static String parseTimestamp(JsonNode value) {

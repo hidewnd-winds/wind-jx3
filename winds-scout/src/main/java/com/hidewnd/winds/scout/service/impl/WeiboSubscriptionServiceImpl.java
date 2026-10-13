@@ -89,15 +89,27 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
             pool.recordFailure(account, exception);
             throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博博主资料查询失败");
         }
-        Optional<WeiboPost> baseline;
+        // 已有订阅正在监听时不能重建静默基线，否则会吞掉下一轮尚未发现的新微博。
+        boolean monitored;
         try {
-            baseline = fetch.fetchLatest(uid, profile.screenName(), account);
-        } catch (WeiboCookieUpdateException exception) {
+            monitored = bloggers.findById(uid)
+                    .map(blogger -> blogger.getTokens() != null && !blogger.getTokens().isEmpty())
+                    .orElse(false);
+        } catch (RuntimeException exception) {
             pool.releaseAccount(account);
             throw exception;
-        } catch (RuntimeException exception) {
-            pool.recordFailure(account, exception);
-            throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博基线查询失败");
+        }
+        Optional<WeiboPost> baseline = Optional.empty();
+        if (!monitored) {
+            try {
+                baseline = fetch.fetchLatest(uid, profile.screenName(), account);
+            } catch (WeiboCookieUpdateException exception) {
+                pool.releaseAccount(account);
+                throw exception;
+            } catch (RuntimeException exception) {
+                pool.recordFailure(account, exception);
+                throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博基线查询失败");
+            }
         }
         pool.recordSuccess(account);
         // 先保存不推送的基线，再让新订阅进入轮询；数据库故障不计入抓取账号失败。
@@ -155,9 +167,7 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
             throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博推文查询失败");
         }
         pool.recordSuccess(account);
-        WeiboPost post = latest.orElseThrow(() -> new ScoutApiException(HttpStatus.NOT_FOUND, "暂无有效微博推文"));
-        // 按需补录只供查询，不产生监听事件；入库失败必须向调用者报告失败。
-        posts.saveOrSync(post, true);
-        return post;
+        // 按需查询不能写入监听集合：轮询以首次入库识别新微博，查询写入会提前消耗通知。
+        return latest.orElseThrow(() -> new ScoutApiException(HttpStatus.NOT_FOUND, "暂无有效微博推文"));
     }
 }
