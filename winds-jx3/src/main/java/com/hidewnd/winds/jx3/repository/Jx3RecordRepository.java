@@ -139,9 +139,10 @@ public class Jx3RecordRepository {
         return mongo.exists(Query.query(Criteria.where("_id").is(key).and("pushedAt").ne(null)), ARTICLES);
     }
 
-    public List<Jx3Event> pendingArticleEvents(boolean maintenance) {
-        // 独立于官网回看窗口重试，且不把历史上仅保存过的事件误认作待发送或发送成功。
+    public List<Jx3Event> pendingArticleEvents(boolean maintenance, Instant now) {
+        // 发布时间以北京时间存储，固定格式可按字符串比较；先过滤再限量，避免旧事件挤占重试批次。
         Query query = Query.query(Criteria.where("pushPending").is(true).and("pushedAt").is(null)
+                .and("event.data.publishedAt").gte(Jx3Time.format(Jx3Time.startOfDay(now)))
                 .and("event.type").is(maintenance ? "jx3.maintenance.updated" : "jx3.news.updated"))
                 .with(Sort.by(Sort.Direction.ASC, "recordedAt")).limit(100);
         return mongo.find(query, Document.class, ARTICLES).stream()
@@ -150,8 +151,10 @@ public class Jx3RecordRepository {
     }
 
     public boolean claimArticlePush(String key, String token, Instant now) {
-        // 同一文章的不同事件也共用数据库占用，避免异步监听或多实例同时发送。
+        // 发送占用时再次检查日期，避免异步事件排队跨过北京时间零点后仍被发出。
+        // 同一文章的不同事件共用数据库占用，避免异步监听或多实例同时发送。
         Criteria available = Criteria.where("_id").is(key).and("pushedAt").is(null)
+                .and("event.data.publishedAt").gte(Jx3Time.format(Jx3Time.startOfDay(now)))
                 .orOperator(Criteria.where("pushClaimUntil").is(null),
                         Criteria.where("pushClaimUntil").lte(Date.from(now)));
         Update claim = new Update().set("pushClaimToken", token)

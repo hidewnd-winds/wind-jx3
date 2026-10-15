@@ -20,4 +20,8 @@ public final class Jx3Time {
     public static Instant parse(String value) {
         return LocalDateTime.parse(value, DATE_TIME).atZone(BEIJING).toInstant();
     }
+
+    public static Instant startOfDay(Instant time) {
+        return time.atZone(BEIJING).toLocalDate().atStartOfDay(BEIJING).toInstant();
+    }
 }

@@ -7,6 +7,7 @@ import com.hidewnd.winds.jx3.event.Jx3Event;
 import com.hidewnd.winds.jx3.event.Jx3EventFactory;
 import com.hidewnd.winds.jx3.repository.Jx3RecordRepository;
 import com.hidewnd.winds.jx3.service.ArticleMonitorService;
+import com.hidewnd.winds.jx3.support.Jx3Time;
 
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -43,6 +44,7 @@ public class ArticleMonitorServiceImpl implements ArticleMonitorService {
     @Override
     public void poll() {
         Instant now = clock.instant();
+        Instant today = Jx3Time.startOfDay(now);
         Instant since = null;
         if (maintenance) {
             since = now.minus(Duration.ofDays(7));
@@ -57,16 +59,17 @@ public class ArticleMonitorServiceImpl implements ArticleMonitorService {
             if (state.equals(previous)) {
                 continue;
             }
+            // 历史文章仍同步正文，但置顶、补抓或内容更新都不能触发今日推送。
             Jx3Event event =
-                    lastSuccess == null
+                    lastSuccess == null || Jx3Time.parse(article.publishedAt()).isBefore(today)
                             ? null
                             : Jx3EventFactory.createArticleEvent(
                                     UUID.randomUUID().toString(), now, article, previous == null);
             store.save(key, state, event);
         }
         lastSuccess = now;
-        // 未成功发送的事件即使内容没变、已离开官网回看窗口或进程重启，也继续重试。
-        for (Jx3Event event : store.pendingArticleEvents(maintenance)) {
+        // 当日文章即使内容没变或进程重启仍可重试；跨日后不再补发。
+        for (Jx3Event event : store.pendingArticleEvents(maintenance, clock.instant())) {
             publisher.publishEvent(event);
         }
     }
