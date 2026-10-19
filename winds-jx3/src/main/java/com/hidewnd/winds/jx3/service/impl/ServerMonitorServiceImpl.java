@@ -24,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,6 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** 编排清单刷新、网关探测、状态确认与持久化后的事件发布。 */
 @Slf4j
 public class ServerMonitorServiceImpl implements ServerMonitorService {
+    private static final Duration OPENING_DEDUP_WINDOW = Duration.ofMinutes(10);
     private final OfficialClient client;
     private final Jx3RecordRepository repository;
     private final ApplicationEventPublisher publisher;
@@ -161,6 +163,7 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
                 repository.save(
                         "server:" + server.zoneId() + ":" + server.serverName(), state, event);
         current.lastOpeningAt = openingAt;
+        current.lastSavedStatus = status;
         if (previousStatus == null) {
             log.info("区服基线已建立，大区={}，服务器={}，地址={}，状态={}；首次确认不推送",
                     server.zoneName(), server.serverName(), server.endpoint(), status);
@@ -288,7 +291,9 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
             throw new IllegalStateException("开服监听已停止");
         }
         ServerState current = stateFor(server);
-        if (current.lastOpeningAt != null && !opening.time().isAfter(current.lastOpeningAt)) {
+        if (isDuplicateOpening(opening, current.lastOpeningAt, current.lastSavedStatus)) {
+            log.info("合并重复开服通知，服务器={}，事件时间={}，已登记开服时间={}",
+                    server.serverName(), Jx3Time.format(opening.time()), Jx3Time.format(current.lastOpeningAt));
             return;
         }
         // 三方有效通知直接作为开服依据；TCP 轮询独立继续，不阻塞或否决通知。
@@ -305,6 +310,7 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         current.tracker.observe(ProbeStatus.UNKNOWN, clock.instant());
         current.tracker.confirm("reachable");
         current.lastOpeningAt = opening.time();
+        current.lastSavedStatus = "reachable";
         current.sequence = ticket;
         if (inserted) {
             log.info("第三方开服通知已保存，服务器={}，事件时间={}，事件={}",
@@ -317,6 +323,9 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         return states.computeIfAbsent(server.endpoint(), ignored -> {
             ServerState state = new ServerState();
             var stored = repository.load("server:" + server.zoneId() + ":" + server.serverName());
+            if (stored != null) {
+                state.lastSavedStatus = stored.path("status").asText(null);
+            }
             if (stored != null && stored.hasNonNull("lastOpeningAt")) {
                 state.lastOpeningAt = Jx3Time.parse(stored.path("lastOpeningAt").asText());
             }
@@ -329,6 +338,7 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
                     Instant openingAt = Jx3Time.parse(unresolved.path("lastOpeningAt").asText());
                     if (state.lastOpeningAt == null || openingAt.isAfter(state.lastOpeningAt)) {
                         state.lastOpeningAt = openingAt;
+                        state.lastSavedStatus = "reachable";
                         state.tracker.confirm("reachable");
                     }
                 }
@@ -344,11 +354,18 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         }
         String key = "server-unresolved:" + opening.zone() + ":" + opening.server();
         var previous = repository.load(key);
-        if (previous != null && !opening.time().isAfter(Jx3Time.parse(previous.path("lastOpeningAt").asText()))) {
-            return;
+        var registered = repository.latestServerState(opening.zone(), opening.server());
+        // 正式服记录包含后续关服状态；相同水位时优先使用它，避免旧兜底记录吞掉再次开服。
+        if (registered != null && registered.hasNonNull("lastOpeningAt")
+                && (previous == null || !Jx3Time.parse(registered.path("lastOpeningAt").asText())
+                        .isBefore(Jx3Time.parse(previous.path("lastOpeningAt").asText())))) {
+            previous = registered;
         }
-        Instant registered = repository.lastServerOpening(opening.zone(), opening.server());
-        if (registered != null && !opening.time().isAfter(registered)) {
+        if (previous != null && isDuplicateOpening(opening,
+                Jx3Time.parse(previous.path("lastOpeningAt").asText()), previous.path("status").asText(null))) {
+            log.info("合并重复开服通知，大区={}，服务器={}，事件时间={}，已登记开服时间={}",
+                    opening.zone(), opening.server(), Jx3Time.format(opening.time()),
+                    previous.path("lastOpeningAt").asText());
             return;
         }
         var event = new Jx3Event("jx3.server.changed", UUID.randomUUID().toString(), Jx3Time.format(opening.time()),
@@ -363,6 +380,14 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
         }
     }
 
+    private static boolean isDuplicateOpening(ServerOpening opening, Instant lastOpeningAt, String lastSavedStatus) {
+        // 两路检测时间不一致，短时间内视为同次开服；明确关服后允许新开服，旧通知仍按水位丢弃。
+        // 被合并的通知不推进水位，避免持续重复通知无限延长去重窗口。
+        return lastOpeningAt != null && (!opening.time().isAfter(lastOpeningAt)
+                || (!"unreachable".equals(lastSavedStatus)
+                    && !opening.time().isAfter(lastOpeningAt.plus(OPENING_DEDUP_WINDOW))));
+    }
+
     @PreDestroy
     public synchronized void close() {
         stopped = true;
@@ -374,6 +399,8 @@ public class ServerMonitorServiceImpl implements ServerMonitorService {
     private static final class ServerState {
         private final ServerStateTracker tracker = new ServerStateTracker();
         private Instant lastOpeningAt;
+        // 持久化状态仅用于跨重启去重，不恢复 TCP 基线，以免补报停机期间的变化。
+        private String lastSavedStatus;
         private long sequence;
     }
 
