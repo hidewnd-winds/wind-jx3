@@ -1,6 +1,6 @@
 package com.hidewnd.winds.jx3.event;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.hidewnd.winds.jx3.model.EarthquakeReport;
 import com.hidewnd.winds.jx3.model.Article;
 import com.hidewnd.winds.jx3.model.GameServer;
 import com.hidewnd.winds.jx3.support.Jx3Time;
@@ -17,34 +17,16 @@ public final class Jx3EventFactory {
 
     private Jx3EventFactory() {}
 
-    public static Jx3Event createEarthquakeEvent(String id, JsonNode detail) {
-        if (!detail.isObject()
-                || !detail.path("latitude").isNumber()
-                || !detail.path("longitude").isNumber()
-                || !detail.path("time").isIntegralNumber()
-                || !detail.path("time").canConvertToLong()) {
-            throw new IllegalArgumentException("地震事件坐标或时间类型无效");
-        }
-        for (String field : new String[]{"location", "intensity", "magnitude", "depth"}) {
-            if (!detail.path(field).isTextual() || detail.path(field).textValue().isBlank()) {
-                throw new IllegalArgumentException("地震事件缺少有效字段：" + field);
-            }
-        }
-        double latitude = detail.path("latitude").doubleValue();
-        double longitude = detail.path("longitude").doubleValue();
-        if (!Double.isFinite(latitude) || latitude < -90 || latitude > 90
-                || !Double.isFinite(longitude) || longitude < -180 || longitude > 180) {
-            throw new IllegalArgumentException("地震事件坐标超出范围");
-        }
-        // 2007 明确使用 Unix 秒；保留原始 detail 字段及类型，不转换震级、烈度或深度字符串。
-        String occurredAt = Jx3Time.format(Instant.ofEpochSecond(detail.path("time").longValue()));
-        String message = "[" + occurredAt + "]国内地震预警\n"
-                + detail.path("location").textValue() + "发生" + detail.path("magnitude").textValue() + "级地震"
-                + "\n烈度：" + detail.path("intensity").textValue()
-                + "，震源深度：" + detail.path("depth").textValue() + "千米"
-                + "\n震中纬度：" + detail.path("latitude").asText()
-                + "，经度：" + detail.path("longitude").asText();
-        return new Jx3Event("jx3.earthquake.warning", id, occurredAt, message, detail);
+    public static Jx3Event createEarthquakeEvent(EarthquakeReport report) {
+        String occurredAt = Jx3Time.format(report.time());
+        String message = "[" + occurredAt + "]国内地震" + (report.source().equals("ceic") ? "信息" : "预警")
+                + "\n" + report.location() + "发生" + report.magnitude() + "级地震"
+                + "\n" + (report.intensity() == null ? "" : "烈度：" + report.intensity() + "，")
+                + "震源深度：" + report.depth() + "千米"
+                + "\n震中纬度：" + report.latitude().toPlainString()
+                + "，经度：" + report.longitude().toPlainString();
+        return new Jx3Event("jx3.earthquake.warning", report.identity(), occurredAt, message,
+                report.data(), report.source());
     }
 
     public static Jx3Event createPatchEvent(

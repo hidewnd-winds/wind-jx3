@@ -2,6 +2,10 @@ package com.hidewnd.winds.jx3.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hidewnd.winds.jx3.client.Jx3ApiWebSocketClient;
+import com.hidewnd.winds.jx3.client.CeicEarthquakeClient;
+import com.hidewnd.winds.jx3.repository.EarthquakeRepository;
+import com.hidewnd.winds.jx3.service.EarthquakeService;
+import org.springframework.beans.factory.ObjectProvider;
 import com.hidewnd.winds.jx3.client.OfficialClient;
 import com.hidewnd.winds.jx3.client.TcpServerProbe;
 import com.hidewnd.winds.jx3.repository.Jx3RecordRepository;
@@ -31,11 +35,10 @@ import java.time.Duration;
 /** 只负责条件启用和依赖装配；监听业务由各服务负责。 */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "winds.jx3", name = "enabled", havingValue = "true")
-@EnableConfigurationProperties({Jx3Properties.class, Jx3ApiSocketProperties.class})
+@EnableConfigurationProperties({Jx3Properties.class, Jx3ApiSocketProperties.class, EarthquakeProperties.class})
 public class Jx3Configuration {
     @Bean(destroyMethod = "shutdownNow")
     @ConditionalOnMissingBean(name = "jx3ApiHttpClient")
-    @ConditionalOnProperty(prefix = "winds.jx3.socket", name = "enabled", havingValue = "true", matchIfMissing = true)
     public HttpClient jx3ApiHttpClient(@Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
         return HttpClient.newBuilder().executor(executor).connectTimeout(Duration.ofSeconds(10)).build();
     }
@@ -44,9 +47,27 @@ public class Jx3Configuration {
     @ConditionalOnProperty(prefix = "winds.jx3.socket", name = "enabled", havingValue = "true", matchIfMissing = true)
     public Jx3ApiWebSocketClient jx3ApiWebSocketClient(
             @Qualifier("jx3ApiHttpClient") HttpClient http,
-            ObjectMapper mapper, ServerMonitorService monitor, ApplicationEventPublisher publisher,
-            @Qualifier("taskScheduler") TaskScheduler scheduler, Jx3ApiSocketProperties properties) {
-        return new Jx3ApiWebSocketClient(http, mapper, monitor, publisher, scheduler, Clock.systemUTC(), properties);
+            ObjectMapper mapper, ServerMonitorService monitor, EarthquakeService earthquakes,
+            @Qualifier("taskScheduler") TaskScheduler scheduler, Jx3ApiSocketProperties properties,
+            @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
+        return new Jx3ApiWebSocketClient(http, mapper, monitor, earthquakes, scheduler, Clock.systemUTC(), properties, executor);
+    }
+
+    @Bean
+    public EarthquakeRepository earthquakeRepository(MongoTemplate mongo) {
+        return new EarthquakeRepository(mongo);
+    }
+
+    @Bean
+    public EarthquakeService earthquakeService(EarthquakeRepository repository, ApplicationEventPublisher publisher) {
+        return new EarthquakeService(repository, publisher, Clock.systemUTC());
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "winds.jx3.earthquake", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CeicEarthquakeClient ceicEarthquakeClient(
+            @Qualifier("jx3ApiHttpClient") HttpClient http, ObjectMapper mapper, EarthquakeProperties properties) {
+        return new CeicEarthquakeClient(http, mapper, properties);
     }
 
     @Bean
@@ -108,6 +129,7 @@ public class Jx3Configuration {
 
     @Bean
     public Jx3PollingScheduler jx3Polling(
+            ObjectProvider<CeicEarthquakeClient> ceic, EarthquakeService earthquakes, EarthquakeProperties earthquakeProperties,
             @Qualifier("jx3NewsMonitor") ArticleMonitorService news,
             @Qualifier("jx3MaintenanceMonitor") ArticleMonitorService maintenance,
             PatchMonitorService patches,
@@ -115,6 +137,8 @@ public class Jx3Configuration {
             Jx3Properties properties,
             @Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor,
             @Qualifier("taskScheduler") TaskScheduler scheduler) {
-        return new Jx3PollingScheduler(news, maintenance, patches, servers, properties, executor, scheduler);
+        CeicEarthquakeClient client = ceic.getIfAvailable();
+        return new Jx3PollingScheduler(news, maintenance, patches, servers, properties, executor, scheduler,
+                client == null ? null : () -> earthquakes.poll(client.fetch()), earthquakeProperties.interval());
     }
 }

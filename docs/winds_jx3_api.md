@@ -1821,35 +1821,49 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 
 **说明：** 展示大小以 totalBytes / 1024² 计算、保留两位小数并标注 MB；精确大小以 totalBytes 为准。
 
-### 5.11 国内地震预警（jx3.earthquake.warning）
+### 5.11 国内地震信息与预警（jx3.earthquake.warning）
 
-接收 [JX3API 事件版 2007](https://seasun.nicemoe.cn/doc.html#/socket/2007) 的 `status=success` 消息后，使用统一事件信封向当前服务实例的全部在线连接广播。沿用 `winds.jx3.enabled=true` 和 `winds.jx3.socket.enabled`（默认启用）的连接配置，无需单独订阅。
+接收 [JX3API 事件版 2007](https://seasun.nicemoe.cn/doc.html#/socket/2007) 的 `status=success` 消息，同时轮询 [中国地震台网官方列表](http://www.ceic.ac.cn/data/data.json)。两源统一存档并取得持久发布资格后，向当前服务实例的全部在线 WebSocket 连接广播，无需单独订阅。
+
+#### 配置与首次运行
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| winds.jx3.enabled | 沿用模块配置 | 模块总开关，两源都受其控制 |
+| winds.jx3.socket.enabled | true | JX3API 连接开关，不影响官方轮询 |
+| winds.jx3.earthquake.enabled | true | 官方列表轮询开关，不影响 JX3API 地震处理 |
+| winds.jx3.earthquake.endpoint | http://www.ceic.ac.cn/data/data.json | 官方 GET 地址 |
+| winds.jx3.earthquake.interval | 35s | 每轮完成后的间隔，可配置 30–40 秒；失败仍按该间隔重试 |
+
+HTTP 请求超时为 10 秒。启动约 10 秒后开始首次轮询，每个来源串行执行，不堆积任务。空列表、非法报文及请求失败不会完成首次基线。
+
+首次成功轮询将全部有效官方记录存档，不补推历史；全批存档成功后持久登记基线，重启不会重新建立。之后官方列表新发现的北京时间当天国内地震可推送，含港澳台及对应省级地名前缀海域；境外和历史记录仍存档。JX3API 沿用其上游地域/当天筛选，不附加开服事件的十分钟有效期。
 
 #### 消息参数
 
 | 字段 | 类型 | 可空 | 说明 |
 | --- | --- | --- | --- |
 | type | string | 否 | 固定 jx3.earthquake.warning |
-| eventId | string | 否 | 本次转发生成的 UUID，不是上游 EventID |
-| occurredAt | string | 否 | 由 data.time 转换的发震北京时间，格式 yyyy-MM-dd HH:mm:ss |
-| message | string | 否 | 可直接展示的地震信息纯文本，包含换行 |
-| data | object | 否 | 保留上游 detail 的字段和值 |
+| eventId | string | 否 | 稳定身份：earthquake:秒级时间:规范纬度:规范经度 |
+| source | string | 否 | jx3api 或 ceic；旧消费者兼容时，缺省按 jx3api 处理 |
+| occurredAt | string | 否 | 发震北京时间，格式 yyyy-MM-dd HH:mm:ss |
+| message | string | 否 | 地震信息或预警纯文本，包含换行 |
+| data | object | 否 | 统一字段，原始报文保存在数据库中 |
 | data.latitude | number | 否 | 震中纬度，范围 -90 至 90 |
 | data.longitude | number | 否 | 震中经度，范围 -180 至 180 |
 | data.location | string | 否 | 震中地名 |
-| data.intensity | string | 否 | 上游返回的烈度 |
-| data.magnitude | string | 否 | 震级，保留原字符串 |
-| data.depth | string | 否 | 震源深度（千米），保留原字符串 |
+| data.intensity | string | 可缺省 | JX3API 必填；官方列表未提供，不以震级代填 |
+| data.magnitude | string | 否 | 震级；JX3API 保留原字符串，官方数值转为十进制字符串 |
+| data.depth | string | 否 | 深度（千米）；JX3API 保留原字符串，官方数值转为十进制字符串 |
 | data.time | integer(int64) | 否 | 发震 Unix 时间戳，单位为秒 |
 
-#### 消息示例
-
-以下使用合成数据，仅说明消息格式。
+以下为合成的 JX3API 消息示例。官方消息 `source=ceic`，标题使用“地震信息”，不包含 `intensity` 和烈度展示。
 
 ```json
 {
   "type": "jx3.earthquake.warning",
-  "eventId": "a2d31253-4bdc-4ec8-b7cb-005e2ba10e7f",
+  "eventId": "earthquake:1791766800:30.5:104.1",
+  "source": "jx3api",
   "occurredAt": "2026-10-12 09:00:00",
   "message": "[2026-10-12 09:00:00]国内地震预警\n四川省示例地区发生3.0级地震\n烈度：2，震源深度：10千米\n震中纬度：30.5，经度：104.1",
   "data": {
@@ -1864,4 +1878,14 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 }
 ```
 
-**说明：** 上游按国内省级地名前缀筛选北京时间当天地震（含港澳台及对应地名海域），并按其 EventID 去重。本服务校验必填字段类型、非空文本、坐标范围和可转换的时间戳，不额外进行地域筛选或去重，不套用开服通知的十分钟有效期。当前上游载荷未提供 EventID，每次收到有效消息都会生成新的 eventId；不保证跨重连或多实例去重。此事件不落库，也不提供离线补发或客户端确认。
+#### 存档与去重边界
+
+独立 MongoDB 集合 `jx3_earthquakes` 以稳定身份为 `_id`，保存统一字段 `data`、来源及原报文集合 `observations`、`firstSeenAt`、`lastSeenAt`、`baseline` 和发布登记字段 `pushRegistered/pushRegisteredAt/pushSource`；`state:ceic-baseline` 文档保存首次完整基线完成时间。记录不设置 TTL。重复报文不重复加入 observations，修订报文可存档但不再次发布。
+
+时间与经纬度必须三项完全一致才合并，`30.50` 与 `30.5` 数值等价；震级、深度、地名和官方 `id` 不参与身份计算。官方 `id` 仅保留在来源元数据中。**同一次实际地震如果两个来源修订了时间或坐标，仍可能分别推送。**
+
+先通过 MongoDB 原子条件更新登记发布资格，再广播；数据库失败不广播。重复轮询、双源同时到达、重连及重启不会让同一身份再次获得资格。登记后进程异常、无在线连接或发送失败均不自动重试；这里保证最多发布一次，不提供离线补发、客户端确认或端到端可靠送达。
+
+wind-bot 新群及缺少地震开关的旧群默认关闭，显式设置保留。用户看到的数据来源文案始终为“信息来源：中国地震台网。请以官方最终发布为准。”，不展示内部采集渠道。上线时先更新 wind-bot 的可缺省烈度和来源识别，再启用 wind-jx3 官方采集。
+
+本地持久性测试使用独立临时 Mongo，可通过 `EARTHQUAKE_TEST_MONGO_URI=mongodb://127.0.0.1:<端口>` 运行 `EarthquakePersistenceTest`。测试只接受回环地址、创建随机测试库并在结束后清理，未设置该变量时跳过这些数据库用例。

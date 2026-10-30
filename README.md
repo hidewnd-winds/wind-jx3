@@ -164,7 +164,7 @@ ws://localhost:9002/ws?token=<WS_TOKEN>
 - `weibo.updated`：仅推送当前 Token 已订阅博主的微博动态。
 - `weibo.account.invalid`、`weibo.account.recovery_failed`、`weibo.pool.unavailable`：仅向当前有微博管理权限的连接推送账号失效、恢复失败及账号池不可用预警。告警持久化，管理客户端通过 `/scout/weibo/alerts` 补拉并在本地保存后确认接收；确认不表示超管私聊已送达。
 - `jx3.news.updated`、`jx3.maintenance.updated`、`jx3.server.changed`、`jx3.patch.updated`：剑三官方数据变化。
-- `jx3.earthquake.warning`：转发 JX3API 事件版 `action=2007` 国内地震预警，向全部在线连接广播；沿用 `winds.jx3.enabled` 与 `winds.jx3.socket.enabled` 开关。
+- `jx3.earthquake.warning`：接收 JX3API `action=2007` 并每 35 秒轮询中国地震台网官方列表，两源统一存档到 `jx3_earthquakes`，按秒级发震时间、数值化经纬度精确去重后向全部在线连接广播。首次官方轮询只建基线；官方采集由 `winds.jx3.earthquake.enabled` 控制，独立于 `winds.jx3.socket.enabled`，两者均受模块总开关控制。
 
 微博和剑三事件的日期时间统一为北京时间 `yyyy-MM-dd HH:mm:ss`。
 

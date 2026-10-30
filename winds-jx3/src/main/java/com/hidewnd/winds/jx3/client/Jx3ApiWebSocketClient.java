@@ -3,14 +3,14 @@ package com.hidewnd.winds.jx3.client;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hidewnd.winds.jx3.config.Jx3ApiSocketProperties;
-import com.hidewnd.winds.jx3.event.Jx3EventFactory;
+import com.hidewnd.winds.jx3.model.EarthquakeReport;
+import com.hidewnd.winds.jx3.service.EarthquakeService;
 import com.hidewnd.winds.jx3.model.ServerOpening;
 import com.hidewnd.winds.jx3.service.ServerMonitorService;
 import com.hidewnd.winds.jx3.support.Jx3Time;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.net.http.HttpClient;
@@ -19,9 +19,9 @@ import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 
 /** 常驻事件版 WSS；连接、分片和心跳归此客户端，业务核验交给监听服务。 */
@@ -30,7 +30,8 @@ public class Jx3ApiWebSocketClient {
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final ServerMonitorService monitor;
-    private final ApplicationEventPublisher publisher;
+    private final EarthquakeService earthquakes;
+    private final Executor executor;
     private final TaskScheduler scheduler;
     private final Clock clock;
     private final Jx3ApiSocketProperties properties;
@@ -42,11 +43,13 @@ public class Jx3ApiWebSocketClient {
     private boolean stopped = true;
 
     public Jx3ApiWebSocketClient(HttpClient http, ObjectMapper mapper, ServerMonitorService monitor,
-            ApplicationEventPublisher publisher, TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties) {
+            EarthquakeService earthquakes, TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties,
+            Executor executor) {
         this.http = http;
         this.mapper = mapper;
         this.monitor = monitor;
-        this.publisher = publisher;
+        this.earthquakes = earthquakes;
+        this.executor = executor;
         this.scheduler = scheduler;
         this.clock = clock;
         this.properties = properties;
@@ -139,16 +142,21 @@ public class Jx3ApiWebSocketClient {
 
     private void acceptMessage(String message) {
         try {
-            var root = mapper.readTree(message);
+            var root = mapper.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                    .readTree(message);
             if (root == null || !root.path("action").isIntegralNumber()
                     || !root.path("action").canConvertToInt()
                     || !"success".equals(root.path("status").textValue())) {
                 return;
             }
             if (root.path("action").intValue() == 2007) {
-                // 地震由上游筛选和去重，不复用开服通知的状态字段与十分钟有效期。
-                publisher.publishEvent(Jx3EventFactory.createEarthquakeEvent(
-                        UUID.randomUUID().toString(), root.path("detail")));
+                EarthquakeReport report = EarthquakeReport.fromJx3Api(root.path("detail"));
+                // 数据库存档与发布交给共享执行器，避免阻塞此连接的收包与心跳锁。
+                CompletableFuture.runAsync(() -> earthquakes.accept(report), executor).whenComplete((ignored, error) -> {
+                    if (error != null) {
+                        log.error("地震报告处理失败，事件={}，异常类型={}", report.identity(), error.getClass().getSimpleName(), error);
+                    }
+                });
                 return;
             }
             if (root.path("action").intValue() != 2001) {

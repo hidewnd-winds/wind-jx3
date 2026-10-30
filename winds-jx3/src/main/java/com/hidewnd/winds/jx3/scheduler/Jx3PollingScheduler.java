@@ -16,6 +16,7 @@ import org.springframework.scheduling.TaskScheduler;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledFuture;
 
@@ -33,14 +34,17 @@ public class Jx3PollingScheduler {
             ServerMonitorService servers,
             Jx3Properties properties,
             AsyncTaskExecutor executor,
-            TaskScheduler scheduler) {
+            TaskScheduler scheduler, Runnable earthquakes, Duration earthquakeInterval) {
         this.executor = executor;
         this.scheduler = scheduler;
-        this.tasks = List.of(
-                new PollingTask("news", news::poll, properties.newsInterval()),
-                new PollingTask("maintenance", maintenance::poll, properties.maintenanceInterval()),
-                new PollingTask("server", servers::poll, properties.serverInterval()),
-                new PollingTask("patch", patches::poll, properties.patchInterval()));
+        this.tasks = new ArrayList<>(List.of(
+                new PollingTask("news", news::poll, properties.newsInterval(), true),
+                new PollingTask("maintenance", maintenance::poll, properties.maintenanceInterval(), true),
+                new PollingTask("server", servers::poll, properties.serverInterval(), true),
+                new PollingTask("patch", patches::poll, properties.patchInterval(), true)));
+        if (earthquakes != null) {
+            tasks.add(new PollingTask("earthquake", earthquakes, earthquakeInterval, false));
+        }
     }
 
     @PostConstruct
@@ -59,16 +63,18 @@ public class Jx3PollingScheduler {
         private final String name;
         private final Runnable action;
         private final Duration interval;
+        private final boolean backoff;
         private Instant lastSuccess;
         private int failures;
         private ScheduledFuture<?> scheduled;
         private FutureTask<Void> running;
         private boolean stopped;
 
-        private PollingTask(String name, Runnable action, Duration interval) {
+        private PollingTask(String name, Runnable action, Duration interval, boolean backoff) {
             this.name = name;
             this.action = action;
             this.interval = interval;
+            this.backoff = backoff;
         }
 
         private synchronized void schedule(Duration delay) {
@@ -109,7 +115,8 @@ public class Jx3PollingScheduler {
 
         private Duration retryAfter(RuntimeException exception) {
             failures = Math.min(6, failures + 1);
-            long delayMillis = Math.min(600_000, interval.toMillis() * (1L << (failures - 1)));
+            long delayMillis = backoff ? Math.min(600_000, interval.toMillis() * (1L << (failures - 1)))
+                    : interval.toMillis();
             log.warn("剑三采集失败，来源={}，最近成功={}，原因={}",
                     name, lastSuccess, exception.getMessage(), exception);
             return Duration.ofMillis(delayMillis);
