@@ -1408,6 +1408,7 @@ Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 | jx3.maintenance.updated | 全部在线连接 | 5.8 |
 | jx3.server.changed | 全部在线连接 | 5.9 |
 | jx3.patch.updated | 全部在线连接 | 5.10 |
+| jx3.earthquake.warning | 全部在线连接 | 5.11 |
 
 以下均为服务端主动消息，无对应的客户端请求参数。客户端无需发送订阅帧，微博订阅通过 HTTP 接口维护。订阅变更无需重连，影响后续推文分发；同一 Token 的多个在线连接均可收到消息。
 
@@ -1781,7 +1782,7 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 
 **说明：** TCP 可达不保证玩家一定能进入游戏；超时不会直接作为关服消息。不可达文案为“[HH:mm:ss]服务器名暂时无法连接，可能维护中。”。
 
-开服辅助通道默认连接 `wss://socket.nicemoe.cn`，由 `winds.jx3.socket.enabled` 控制启用，连接失败自动重连并维持心跳。只处理 `action=2001` 且 `status=success` 的开服事件；`detail.status` 接受整数 `1` 或字符串 `"1"`。有效通知经去重后登记并广播，不以 TCP 成功为前置条件；超过十分钟或超过当前时间一分钟的通知被丢弃。同一区服（含已解析别名）以已登记开服时间为起点，合并随后十分钟内的开服通知；被合并的通知不延长窗口。期间若已确认关服，则允许时间晚于上次开服的通知立即再次播报；不晚于上次开服时间的旧通知始终丢弃。去重读取持久化状态，重连、重启及尚无官方清单的兜底入口沿用同一规则；首次 TCP 仅建立基线且没有开服记录时，不拦截第三方首次开服通知。
+开服辅助通道默认连接 `wss://socket.nicemoe.cn`，由 `winds.jx3.socket.enabled` 控制启用，连接失败自动重连并维持心跳。开服分支处理 `action=2001` 且 `status=success` 的事件（同一连接也转发 `action=2007` 地震预警，见 5.11）；`detail.status` 接受整数 `1` 或字符串 `"1"`。有效通知经去重后登记并广播，不以 TCP 成功为前置条件；超过十分钟或超过当前时间一分钟的通知被丢弃。同一区服（含已解析别名）以已登记开服时间为起点，合并随后十分钟内的开服通知；被合并的通知不延长窗口。期间若已确认关服，则允许时间晚于上次开服的通知立即再次播报；不晚于上次开服时间的旧通知始终丢弃。去重读取持久化状态，重连、重启及尚无官方清单的兜底入口沿用同一规则；首次 TCP 仅建立基线且没有开服记录时，不拦截第三方首次开服通知。
 
 比赛专区的“练习专用服”和“比赛专用服”在官方清单解析和第三方通知入口均被排除，不进行探测、不登记开服事件。首次 TCP 采集仍只建立基线，不补发停机期间变化。
 
@@ -1819,3 +1820,48 @@ WebSocket 推送只覆盖当前服务实例在线连接。微博管理告警另�
 ```
 
 **说明：** 展示大小以 totalBytes / 1024² 计算、保留两位小数并标注 MB；精确大小以 totalBytes 为准。
+
+### 5.11 国内地震预警（jx3.earthquake.warning）
+
+接收 [JX3API 事件版 2007](https://seasun.nicemoe.cn/doc.html#/socket/2007) 的 `status=success` 消息后，使用统一事件信封向当前服务实例的全部在线连接广播。沿用 `winds.jx3.enabled=true` 和 `winds.jx3.socket.enabled`（默认启用）的连接配置，无需单独订阅。
+
+#### 消息参数
+
+| 字段 | 类型 | 可空 | 说明 |
+| --- | --- | --- | --- |
+| type | string | 否 | 固定 jx3.earthquake.warning |
+| eventId | string | 否 | 本次转发生成的 UUID，不是上游 EventID |
+| occurredAt | string | 否 | 由 data.time 转换的发震北京时间，格式 yyyy-MM-dd HH:mm:ss |
+| message | string | 否 | 可直接展示的地震信息纯文本，包含换行 |
+| data | object | 否 | 保留上游 detail 的字段和值 |
+| data.latitude | number | 否 | 震中纬度，范围 -90 至 90 |
+| data.longitude | number | 否 | 震中经度，范围 -180 至 180 |
+| data.location | string | 否 | 震中地名 |
+| data.intensity | string | 否 | 上游返回的烈度 |
+| data.magnitude | string | 否 | 震级，保留原字符串 |
+| data.depth | string | 否 | 震源深度（千米），保留原字符串 |
+| data.time | integer(int64) | 否 | 发震 Unix 时间戳，单位为秒 |
+
+#### 消息示例
+
+以下使用合成数据，仅说明消息格式。
+
+```json
+{
+  "type": "jx3.earthquake.warning",
+  "eventId": "a2d31253-4bdc-4ec8-b7cb-005e2ba10e7f",
+  "occurredAt": "2026-10-12 09:00:00",
+  "message": "[2026-10-12 09:00:00]国内地震预警\n四川省示例地区发生3.0级地震\n烈度：2，震源深度：10千米\n震中纬度：30.5，经度：104.1",
+  "data": {
+    "latitude": 30.5,
+    "longitude": 104.1,
+    "location": "四川省示例地区",
+    "intensity": "2",
+    "magnitude": "3.0",
+    "depth": "10",
+    "time": 1791766800
+  }
+}
+```
+
+**说明：** 上游按国内省级地名前缀筛选北京时间当天地震（含港澳台及对应地名海域），并按其 EventID 去重。本服务校验必填字段类型、非空文本、坐标范围和可转换的时间戳，不额外进行地域筛选或去重，不套用开服通知的十分钟有效期。当前上游载荷未提供 EventID，每次收到有效消息都会生成新的 eventId；不保证跨重连或多实例去重。此事件不落库，也不提供离线补发或客户端确认。

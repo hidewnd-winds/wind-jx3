@@ -3,12 +3,14 @@ package com.hidewnd.winds.jx3.client;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hidewnd.winds.jx3.config.Jx3ApiSocketProperties;
+import com.hidewnd.winds.jx3.event.Jx3EventFactory;
 import com.hidewnd.winds.jx3.model.ServerOpening;
 import com.hidewnd.winds.jx3.service.ServerMonitorService;
 import com.hidewnd.winds.jx3.support.Jx3Time;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
 
 import java.net.http.HttpClient;
@@ -17,6 +19,7 @@ import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledFuture;
@@ -27,6 +30,7 @@ public class Jx3ApiWebSocketClient {
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final ServerMonitorService monitor;
+    private final ApplicationEventPublisher publisher;
     private final TaskScheduler scheduler;
     private final Clock clock;
     private final Jx3ApiSocketProperties properties;
@@ -38,10 +42,11 @@ public class Jx3ApiWebSocketClient {
     private boolean stopped = true;
 
     public Jx3ApiWebSocketClient(HttpClient http, ObjectMapper mapper, ServerMonitorService monitor,
-            TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties) {
+            ApplicationEventPublisher publisher, TaskScheduler scheduler, Clock clock, Jx3ApiSocketProperties properties) {
         this.http = http;
         this.mapper = mapper;
         this.monitor = monitor;
+        this.publisher = publisher;
         this.scheduler = scheduler;
         this.clock = clock;
         this.properties = properties;
@@ -119,7 +124,7 @@ public class Jx3ApiWebSocketClient {
         }
         if (!stopped) {
             // 不记录远端关闭原因、异常文本或连接 URL，避免第三方载荷或查询凭据进入日志。
-            log.warn("第三方开服 WSS 已断开，原因={}；{} 后重连", reason, properties.reconnectInterval());
+            log.warn("第三方事件 WSS 已断开，原因={}；{} 后重连", reason, properties.reconnectInterval());
         }
     }
 
@@ -137,8 +142,16 @@ public class Jx3ApiWebSocketClient {
             var root = mapper.readTree(message);
             if (root == null || !root.path("action").isIntegralNumber()
                     || !root.path("action").canConvertToInt()
-                    || root.path("action").intValue() != 2001
                     || !"success".equals(root.path("status").textValue())) {
+                return;
+            }
+            if (root.path("action").intValue() == 2007) {
+                // 地震由上游筛选和去重，不复用开服通知的状态字段与十分钟有效期。
+                publisher.publishEvent(Jx3EventFactory.createEarthquakeEvent(
+                        UUID.randomUUID().toString(), root.path("detail")));
+                return;
+            }
+            if (root.path("action").intValue() != 2001) {
                 return;
             }
             var detail = root.path("detail");
@@ -173,7 +186,7 @@ public class Jx3ApiWebSocketClient {
                 }
             });
         } catch (JsonProcessingException | IllegalArgumentException | java.time.DateTimeException exception) {
-            log.warn("忽略无效的第三方开服消息，异常类型={}", exception.getClass().getSimpleName());
+            log.warn("忽略无效的第三方事件消息，异常类型={}", exception.getClass().getSimpleName());
         }
     }
 
@@ -190,7 +203,7 @@ public class Jx3ApiWebSocketClient {
                 }
                 socket = opened;
                 lastPong = clock.instant();
-                log.info("第三方开服 WSS 连接成功");
+                log.info("第三方事件 WSS 连接成功");
             }
             opened.request(1);
         }
@@ -202,7 +215,7 @@ public class Jx3ApiWebSocketClient {
                     return null;
                 }
                 // 校验连接身份与提交消息使用同一把锁，防止断线后的旧回调穿过检查。
-                // verifyOpening 仅向共享执行器提交任务，不在此锁内访问数据库或探测网络。
+                // 开服核验与事件广播交给异步执行器，不在此锁内访问数据库或发送下游消息。
                 if (text.length() + data.length() > 65_536) {
                     disconnect(this, "消息超过大小限制");
                     return null;

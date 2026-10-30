@@ -44,9 +44,9 @@ public class Jx3Configuration {
     @ConditionalOnProperty(prefix = "winds.jx3.socket", name = "enabled", havingValue = "true", matchIfMissing = true)
     public Jx3ApiWebSocketClient jx3ApiWebSocketClient(
             @Qualifier("jx3ApiHttpClient") HttpClient http,
-            ObjectMapper mapper, ServerMonitorService monitor,
+            ObjectMapper mapper, ServerMonitorService monitor, ApplicationEventPublisher publisher,
             @Qualifier("taskScheduler") TaskScheduler scheduler, Jx3ApiSocketProperties properties) {
-        return new Jx3ApiWebSocketClient(http, mapper, monitor, scheduler, Clock.systemUTC(), properties);
+        return new Jx3ApiWebSocketClient(http, mapper, monitor, publisher, scheduler, Clock.systemUTC(), properties);
     }
 
     @Bean
