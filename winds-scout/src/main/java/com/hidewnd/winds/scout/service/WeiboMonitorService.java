@@ -6,7 +6,7 @@ package com.hidewnd.winds.scout.service;
 public interface WeiboMonitorService {
 
     /**
-     * 获取轮询租约并依次检查所有已启用博主，保存新微博并发布更新事件。
+     * 维护轮询租约，按 UID 到期时间异步派发抓取和按序处理任务。
      */
     void poll();
 }

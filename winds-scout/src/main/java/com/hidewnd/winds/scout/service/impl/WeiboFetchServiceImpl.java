@@ -1,6 +1,7 @@
 package com.hidewnd.winds.scout.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hidewnd.winds.scout.exception.WeiboCookieUpdateException;
 import com.hidewnd.winds.scout.exception.WeiboAccountInvalidException;
@@ -21,7 +22,13 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.io.IOException;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.Optional;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -40,6 +47,10 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
     private static final String USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) "
             + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
 
+    // 所有微博入口共享同一实例的名额，处理响应和等待下一次派发均不持有名额。
+    private final Semaphore requestSlots = new Semaphore(2, true);
+    private final ObjectMapper objectMapper;
+    private final Clock clock;
     private final RestClient restClient;
     private final WeiboResponseParser parser;
     private final WeiboCookieStore cookieStore;
@@ -49,7 +60,9 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
             @Qualifier("weiboRestClient") RestClient restClient,
             WeiboResponseParser parser,
             WeiboCookieStore cookieStore,
-            WeiboAccountCookieRepository cookieRepository) {
+            WeiboAccountCookieRepository cookieRepository, ObjectMapper objectMapper, Clock clock) {
+        this.objectMapper = objectMapper;
+        this.clock = clock;
         this.restClient = restClient;
         this.parser = parser;
         this.cookieStore = cookieStore;
@@ -118,6 +131,12 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
 
     @Override
     public Optional<WeiboPost> fetchLatest(String uid, String fallbackScreenName, WeiboAccount account) {
+        return fetchLatest(uid, fallbackScreenName, account, null);
+    }
+
+    @Override
+    public Optional<WeiboPost> fetchLatest(String uid, String fallbackScreenName, WeiboAccount account,
+                                          Consumer<Instant> onRequestStarted) {
         if (uid == null || !uid.matches("\\d+")) {
             throw new IllegalArgumentException("微博UID仅支持数字");
         }
@@ -126,7 +145,7 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
             headers.set(HttpHeaders.ACCEPT, "*/*");
             headers.set(HttpHeaders.REFERER, "https://m.weibo.cn/u/" + uid);
             headers.set("x-requested-with", "XMLHttpRequest");
-        });
+        }, onRequestStarted);
         if (response == null) {
             throw new IllegalStateException("微博接口返回空响应");
         }
@@ -137,7 +156,10 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
             }
             throw new IllegalStateException("微博接口返回异常");
         }
+        long selectStarted = System.nanoTime();
         Optional<ObjectNode> latestCard = parser.selectLatestCard(response);
+        log.info("微博列表筛选耗时，uid={}，selectMs={}", uid,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - selectStarted));
         if (latestCard.isEmpty()) {
             return Optional.empty();
         }
@@ -148,17 +170,22 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
             completeArticle(mblog, account);
             mblog = mblog.path("retweeted_status");
         }
-        return Optional.of(parser.parseCard(latestCard.get(), uid)).map(post -> {
+        long contentStarted = System.nanoTime();
+        try {
+            WeiboPost post = parser.parseCard(latestCard.get(), uid);
             if (!post.screenName().isBlank() || fallbackScreenName == null) {
-                return post;
+                return Optional.of(post);
             }
-            return new WeiboPost(
+            return Optional.of(new WeiboPost(
                     post.uid(), fallbackScreenName, post.weiboId(), post.publishedAt(), post.content(),
                     post.rawContent(), post.source(), post.regionName(), post.repostsCount(), post.commentsCount(),
                     post.attitudesCount(), post.url(),
                     post.images(), post.topics(), post.videoCoverImages(), post.retweet(),
-                    post.media(), post.links(), post.article(), post.truncated());
-        });
+                    post.media(), post.links(), post.article(), post.truncated()));
+        } finally {
+            log.info("微博内容解析耗时，uid={}，contentParseMs={}", uid,
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - contentStarted));
+        }
     }
 
     private void completeLongText(JsonNode mblog, WeiboAccount account) {
@@ -236,37 +263,83 @@ public class WeiboFetchServiceImpl implements WeiboFetchService {
     }
 
     private JsonNode getJson(URI uri, WeiboAccount account, Consumer<HttpHeaders> headersCustomizer) {
+        return getJson(uri, account, headersCustomizer, null);
+    }
+
+    private JsonNode getJson(URI uri, WeiboAccount account, Consumer<HttpHeaders> headersCustomizer,
+                             Consumer<Instant> onRequestStarted) {
         String cookieHeader = cookieStore.buildCookieHeader(account, uri);
         String xsrfToken = cookieStore.getXsrfToken(account, uri);
+        long waitingAt = System.nanoTime();
+        long waitNanos = 0;
+        long httpNanos = 0;
+        long parseNanos = 0;
+        long cookieNanos = 0;
+        boolean success = false;
         try {
-            ResponseEntity<JsonNode> response = restClient.get()
-                    .uri(uri)
-                    .headers(headers -> {
-                        headers.set(HttpHeaders.USER_AGENT, USER_AGENT);
-                        if (!cookieHeader.isBlank()) {
-                            headers.set(HttpHeaders.COOKIE, cookieHeader);
-                        }
-                        if (!xsrfToken.isBlank()) {
-                            headers.set("x-xsrf-token", xsrfToken);
-                        }
-                        headersCustomizer.accept(headers);
-                    })
-                    .retrieve()
-                    .toEntity(JsonNode.class);
-            JsonNode body = response.getBody();
-            boolean invalidAccount = false;
-            // 列表和长文共用登录失效判定，防止长文降级逻辑把失效账号记为成功。
-            if (body != null && body.path("ok").asInt() != 1) {
-                String message = body.path("msg").asText("");
-                invalidAccount = message.contains("请先登录") || message.contains("请重新登录")
-                        || message.contains("登录失效") || message.contains("登录已过期")
-                        || message.contains("未登录");
+            try {
+                requestSlots.acquire();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("微博请求等待已中断");
+            } finally {
+                waitNanos = System.nanoTime() - waitingAt;
             }
-            updateResponseState(account, uri, response.getHeaders(), invalidAccount);
+            ResponseEntity<byte[]> response = null;
+            RestClientResponseException httpFailure = null;
+            long httpStarted = System.nanoTime();
+            try {
+                var request = restClient.get().uri(uri).headers(headers -> {
+                    headers.set(HttpHeaders.USER_AGENT, USER_AGENT);
+                    if (!cookieHeader.isBlank()) headers.set(HttpHeaders.COOKIE, cookieHeader);
+                    if (!xsrfToken.isBlank()) headers.set("x-xsrf-token", xsrfToken);
+                    headersCustomizer.accept(headers);
+                });
+                if (onRequestStarted != null) onRequestStarted.accept(clock.instant());
+                response = request.retrieve().toEntity(byte[].class);
+            } catch (RestClientResponseException exception) {
+                httpFailure = exception;
+            } finally {
+                httpNanos = System.nanoTime() - httpStarted;
+                requestSlots.release();
+            }
+
+            // 先完整接收字节并释放 HTTP 名额，再解析与写入 Cookie；错误响应同样遵守此边界。
+            JsonNode body = null;
+            boolean invalidAccount = httpFailure != null && httpFailure.getStatusCode().value() == 401;
+            if (httpFailure == null) {
+                long parseStarted = System.nanoTime();
+                try {
+                    byte[] bytes = response.getBody();
+                    body = bytes == null || bytes.length == 0 ? null : objectMapper.readTree(bytes);
+                } catch (IOException exception) {
+                    throw new RestClientException("微博响应 JSON 无效", exception);
+                } finally {
+                    parseNanos = System.nanoTime() - parseStarted;
+                }
+                // 列表和补全共用失效判定，不能把失效账号当成长文降级成功。
+                if (body != null && body.path("ok").asInt() != 1) {
+                    String message = body.path("msg").asText("");
+                    invalidAccount = message.contains("请先登录") || message.contains("请重新登录")
+                            || message.contains("登录失效") || message.contains("登录已过期")
+                            || message.contains("未登录");
+                }
+            }
+            long cookieStarted = System.nanoTime();
+            try {
+                updateResponseState(account, uri,
+                        httpFailure == null ? response.getHeaders() : httpFailure.getResponseHeaders(), invalidAccount);
+            } finally {
+                cookieNanos = System.nanoTime() - cookieStarted;
+            }
+            if (httpFailure != null) throw httpFailure;
+            success = true;
             return body;
-        } catch (RestClientResponseException exception) {
-            updateResponseState(account, uri, exception.getResponseHeaders(), exception.getStatusCode().value() == 401);
-            throw exception;
+        } finally {
+            log.info("微博请求耗时，accountId={}，endpoint={}，slotWaitMs={}，httpMs={}，jsonParseMs={}，cookieMs={}，success={}",
+                    account.getId(), uri.getHost() + uri.getPath(), TimeUnit.NANOSECONDS.toMillis(waitNanos),
+                    TimeUnit.NANOSECONDS.toMillis(httpNanos), TimeUnit.NANOSECONDS.toMillis(parseNanos),
+                    TimeUnit.NANOSECONDS.toMillis(cookieNanos), success);
         }
     }
 

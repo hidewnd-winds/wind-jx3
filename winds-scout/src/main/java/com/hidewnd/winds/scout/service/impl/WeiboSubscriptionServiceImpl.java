@@ -21,6 +21,7 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 /** 订阅关系与按需查询的业务入口，数据库异常不归因于抓取账号。 */
 @Service
@@ -66,7 +67,7 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
                 // 匹配歧义是查询结果，不应停用正常账号。
                 pool.recordSuccess(account);
                 throw exception;
-            } catch (WeiboCookieUpdateException exception) {
+            } catch (WeiboCookieUpdateException | CancellationException exception) {
                 pool.releaseAccount(account);
                 throw exception;
             } catch (RuntimeException exception) {
@@ -82,7 +83,7 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
         WeiboUserProfile profile;
         try {
             profile = fetch.fetchUserProfile(uid, account);
-        } catch (WeiboCookieUpdateException exception) {
+        } catch (WeiboCookieUpdateException | CancellationException exception) {
             pool.releaseAccount(account);
             throw exception;
         } catch (RuntimeException exception) {
@@ -103,7 +104,7 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
         if (!monitored) {
             try {
                 baseline = fetch.fetchLatest(uid, profile.screenName(), account);
-            } catch (WeiboCookieUpdateException exception) {
+            } catch (WeiboCookieUpdateException | CancellationException exception) {
                 pool.releaseAccount(account);
                 throw exception;
             } catch (RuntimeException exception) {
@@ -159,7 +160,7 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
         Optional<WeiboPost> latest;
         try {
             latest = fetch.fetchLatest(uid, screenName, account);
-        } catch (WeiboCookieUpdateException exception) {
+        } catch (WeiboCookieUpdateException | CancellationException exception) {
             pool.releaseAccount(account);
             throw exception;
         } catch (RuntimeException exception) {

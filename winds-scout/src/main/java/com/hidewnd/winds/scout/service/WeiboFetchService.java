@@ -4,7 +4,9 @@ import com.hidewnd.winds.scout.model.WeiboAccount;
 import com.hidewnd.winds.scout.model.WeiboPost;
 import com.hidewnd.winds.scout.model.WeiboUserProfile;
 
+import java.time.Instant;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * 微博内容抓取服务。
@@ -26,4 +28,7 @@ public interface WeiboFetchService {
      * @return 最新微博；接口无内容或没有可用微博时返回空
      */
     Optional<WeiboPost> fetchLatest(String uid, String fallbackScreenName, WeiboAccount account);
+    /** 监听专用：取得 HTTP 名额后、发送首个列表请求前通知实际开始时间。 */
+    Optional<WeiboPost> fetchLatest(String uid, String fallbackScreenName, WeiboAccount account,
+                                   Consumer<Instant> onRequestStarted);
 }
