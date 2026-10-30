@@ -35,6 +35,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 /** 按博主请求开始时间调度；HTTP 抓取与同 UID 的按序入库分别管理。 */
 @Slf4j
@@ -53,7 +54,7 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
     private final AsyncTaskExecutor executor;
     private final IntSupplier pauseSeconds;
     private final String leaseOwner = UUID.randomUUID().toString();
-    // 调度集合和两路错峰时间仅由 poll 修改；工作线程只更新各 UID 的在途状态与处理队列。
+    // 调度与基线初始化持有实例锁登记 UID；工作线程只在 UID 锁内维护处理队列。
     private final Map<String, PollState> states = new HashMap<>();
     private final Instant[] nextDispatch = {Instant.MIN, Instant.MIN};
     private Instant nextRefresh = Instant.MIN;
@@ -104,14 +105,15 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
                         log.warn("微博监听跳过：UID无效");
                         continue;
                     }
-                    PollState state = states.computeIfAbsent(blogger.getUid(), uid -> new PollState(blogger, now));
+                    PollState state = states.computeIfAbsent(blogger.getUid(), uid -> new PollState(uid, now));
                     state.blogger = blogger;
                     state.subscribed = true;
                 }
                 // 取消订阅后保留仍在途的队列，避免短时间重新订阅产生第二条入库链。
                 states.values().removeIf(state -> {
                     synchronized (state) {
-                        return !state.subscribed && !state.fetching && !state.processing && state.pending.isEmpty();
+                        return !state.subscribed && !state.fetching && !state.processing
+                                && state.baselineRequests == 0 && state.pending.isEmpty();
                     }
                 });
             } catch (RuntimeException exception) {
@@ -126,10 +128,10 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
         if (!dispatchEnabled) return;
 
         List<PollState> due = states.values().stream()
-                .filter(state -> state.subscribed && !state.fetching)
+                .filter(state -> state.subscribed && !state.fetching && state.baselineRequests == 0)
                 .filter(state -> state.lastStarted == null || !now.isBefore(state.lastStarted.plus(POLL_INTERVAL)))
                 .sorted(Comparator.comparing((PollState state) -> state.lastStarted == null ? Instant.MIN : state.lastStarted)
-                        .thenComparing(state -> state.blogger.getUid()))
+                        .thenComparing(state -> state.uid))
                 .toList();
         int index = 0;
         boolean noAccount = false;
@@ -158,9 +160,42 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
             Instant last = state.lastStarted == null ? state.discoveredAt : state.lastStarted;
             if (now.isAfter(last.plus(MAX_INTERVAL)) && !now.isBefore(state.nextDelayWarning)) {
                 state.nextDelayWarning = now.plusSeconds(30);
-                log.warn("微博监听延期，uid={}，delayMs={}，原因={}", state.blogger.getUid(),
+                log.warn("微博监听延期，uid={}，delayMs={}，原因={}", state.uid,
                         Duration.between(last.plus(MAX_INTERVAL), now).toMillis(),
-                        state.fetching ? "抓取链在途或等待HTTP名额" : noAccount ? "无可用抓取账号" : "等待错峰派发或调度积压");
+                        state.baselineRequests > 0 ? "等待基线重建" : state.fetching ? "抓取链在途或等待HTTP名额"
+                                : noAccount ? "无可用抓取账号" : "等待错峰派发或调度积压");
+            }
+        }
+    }
+
+    @Override
+    public void initializeBaseline(String uid, Supplier<Optional<WeiboPost>> fetchBaseline) throws InterruptedException {
+        PollState state;
+        synchronized (this) {
+            state = states.computeIfAbsent(uid, key -> new PollState(key, clock.instant()));
+            synchronized (state) {
+                // 与 poll 的派发和清理共享登记边界，防止等待期间删掉旧状态或派发新的抓取。
+                state.baselineRequests++;
+            }
+        }
+        boolean initializing = false;
+        try {
+            synchronized (state) {
+                while (state.fetching || state.processing || !state.pending.isEmpty() || state.initializingBaseline) {
+                    state.wait();
+                }
+                state.initializingBaseline = true;
+                initializing = true;
+            }
+            // 必须先等待旧抓取结束再获取基线，仅串行写入已获取的基线仍可能颠倒快照新旧顺序。
+            // 不持有实例锁或 UID 锁执行 I/O；其他 UID 的监听与处理可以继续。
+            Optional<WeiboPost> baseline = fetchBaseline.get();
+            if (baseline.isPresent()) postRepository.saveOrSync(baseline.get(), true);
+        } finally {
+            synchronized (state) {
+                if (initializing) state.initializingBaseline = false;
+                state.baselineRequests--;
+                state.notifyAll();
             }
         }
     }
@@ -202,7 +237,10 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
             // 本地状态或入队失败不能算作上游账号失败；下一轮仍可继续抓取。
             log.warn("微博抓取结果处理失败，uid={}，异常类型={}", blogger.getUid(), exception.getClass().getSimpleName());
         } finally {
-            state.fetching = false;
+            synchronized (state) {
+                state.fetching = false;
+                state.notifyAll();
+            }
         }
     }
 
@@ -228,11 +266,13 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
             synchronized (state) {
                 if (Thread.currentThread().isInterrupted()) {
                     state.processing = false;
+                    state.notifyAll();
                     return;
                 }
                 pending = state.pending.pollFirst();
                 if (pending == null) {
                     state.processing = false;
+                    state.notifyAll();
                     return;
                 }
             }
@@ -271,18 +311,22 @@ public class WeiboMonitorServiceImpl implements WeiboMonitorService {
     }
 
     private static final class PollState {
+        private final String uid;
+        // 首次基线登记时尚未有订阅；poll 读取到订阅后才填入博主资料并允许派发。
         private WeiboBlogger blogger;
         private final Instant discoveredAt;
         private boolean subscribed;
         private volatile Instant lastStarted;
         private volatile boolean fetching;
+        private volatile int baselineRequests;
+        private boolean initializingBaseline;
         private Instant nextDelayWarning = Instant.MIN;
         // 队列和 processing 在同一个 UID 锁内更新，锁内不执行任何 HTTP、数据库或事件 I/O。
         private final ArrayDeque<PendingPost> pending = new ArrayDeque<>();
         private boolean processing;
 
-        private PollState(WeiboBlogger blogger, Instant discoveredAt) {
-            this.blogger = blogger;
+        private PollState(String uid, Instant discoveredAt) {
+            this.uid = uid;
             this.discoveredAt = discoveredAt;
         }
     }

@@ -13,6 +13,7 @@ import com.hidewnd.winds.scout.repository.WeiboPostRepository;
 import com.hidewnd.winds.scout.repository.WeiboSubscriptionRepository;
 import com.hidewnd.winds.scout.service.WeiboAccountPoolService;
 import com.hidewnd.winds.scout.service.WeiboFetchService;
+import com.hidewnd.winds.scout.service.WeiboMonitorService;
 import com.hidewnd.winds.scout.service.WeiboSubscriptionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -32,15 +33,18 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
     private final WeiboAccountPoolService pool;
     private final WeiboFetchService fetch;
     private final Clock clock;
+    private final WeiboMonitorService monitor;
 
     public WeiboSubscriptionServiceImpl(WeiboBloggerRepository bloggers, WeiboSubscriptionRepository subscriptions,
-            WeiboPostRepository posts, WeiboAccountPoolService pool, WeiboFetchService fetch, Clock clock) {
+            WeiboPostRepository posts, WeiboAccountPoolService pool, WeiboFetchService fetch, Clock clock,
+            WeiboMonitorService monitor) {
         this.bloggers = bloggers;
         this.subscriptions = subscriptions;
         this.posts = posts;
         this.pool = pool;
         this.fetch = fetch;
         this.clock = clock;
+        this.monitor = monitor;
     }
 
     @Override
@@ -100,24 +104,33 @@ public class WeiboSubscriptionServiceImpl implements WeiboSubscriptionService {
             pool.releaseAccount(account);
             throw exception;
         }
-        Optional<WeiboPost> baseline = Optional.empty();
+        // 等待旧数据处理时不占用 Cookie 账号，否则单账号部署会拖住其他 UID 的监听。
+        pool.recordSuccess(account);
         if (!monitored) {
+            String baselineUid = uid;
             try {
-                baseline = fetch.fetchLatest(uid, profile.screenName(), account);
-            } catch (WeiboCookieUpdateException | CancellationException exception) {
-                pool.releaseAccount(account);
-                throw exception;
-            } catch (RuntimeException exception) {
-                pool.recordFailure(account, exception);
-                throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博基线查询失败");
+                monitor.initializeBaseline(uid, () -> {
+                    WeiboAccount baselineAccount = pool.chooseAccount()
+                            .orElseThrow(() -> new ScoutApiException(HttpStatus.SERVICE_UNAVAILABLE, "没有可用的微博账号"));
+                    Optional<WeiboPost> baseline;
+                    try {
+                        baseline = fetch.fetchLatest(baselineUid, profile.screenName(), baselineAccount);
+                    } catch (WeiboCookieUpdateException | CancellationException exception) {
+                        pool.releaseAccount(baselineAccount);
+                        throw exception;
+                    } catch (RuntimeException exception) {
+                        pool.recordFailure(baselineAccount, exception);
+                        throw new ScoutApiException(HttpStatus.BAD_GATEWAY, "微博基线查询失败");
+                    }
+                    pool.recordSuccess(baselineAccount);
+                    return baseline;
+                });
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("微博基线初始化等待已中断");
             }
         }
-        pool.recordSuccess(account);
-        // 先保存不推送的基线，再让新订阅进入轮询；数据库故障不计入抓取账号失败。
-        // 无有效推文时不创建虚假基线，保留轮询首次抓取的既有处理。
-        if (baseline.isPresent()) {
-            posts.saveOrSync(baseline.get(), true);
-        }
+        // 同 UID 的旧结果处理完且基线成功入库后才建立订阅；入库失败不归因于抓取账号。
         return BloggerResponse.from(subscriptions.subscribe(uid, token, profile.screenName(), profile.avatar(),
                 request.aliases(), clock.instant()));
     }
