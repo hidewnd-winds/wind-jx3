@@ -18,6 +18,7 @@ public class BoxUtils {
         if (value == null) {
             return "";
         }
+        if (value == 0) return "0铜";
         String prefix = "";
         if (value < 0) {
             prefix = "负";
@@ -38,7 +39,7 @@ public class BoxUtils {
 
     public static long computePrice(long value, long threshold, StringBuilder builder, String format,
                                     List<Object> params) {
-        if (value > threshold) {
+        if (value >= threshold) {
             long result = value / threshold;
             if (value % threshold >= 0) {
                 value -= result * threshold;

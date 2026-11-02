@@ -983,220 +983,103 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 
 ### 4.1 查询单个技艺制品成本
 
-**接口：`POST /costing/one`**
+**接口：`POST /costing/one`**，无需 Token，`Content-Type: application/json`。
 
-**鉴权：** 无需 Token。
+#### 请求
 
-#### 请求参数
-
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- | --- |
-| Content-Type | header | string | 是 | application/json |
-| formulaName | body | string | 是 | 技艺制品名称，不能为 null 或空白 |
-| number | body | integer | 是 | 需求数量，不能为 null，最小 1 |
-| server | body | string / null | 否 | null 或空字符串使用服务端默认服务器；仅空白字符串不会被视为缺省 |
-| rangeCreate | body | boolean / null | 否 | 是否按随机产出数量计算；省略或 null 默认为 true |
-
-#### 请求示例
-
-```http
-POST /costing/one HTTP/1.1
-Host: <host>:9002
-Content-Type: application/json
-
-{
-  "formulaName": "示例配方",
-  "number": 2,
-  "server": "剑胆琴心",
-  "rangeCreate": true
-}
-```
-
-#### 响应参数
-
-成功 HTTP 状态：200。
-
-| 字段 | 类型 | 可空 | 说明 |
+| 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| success | boolean | 否 | 成功时为 true |
-| code | integer | 否 | 成功时为 200 |
-| msg | string | 否 | 成功时为“请求成功” |
-| obj | object | 否 | 本接口业务对象 |
-| obj.server | string | 是 | 服务器名称 |
-| obj.energies | integer | 是 | 预计总精力 |
-| obj.cost | integer(int64) | 是 | 材料总成本原始数值 |
-| obj.costString | string | 是 | 格式化总成本 |
-| obj.value | integer(int64) | 是 | 交易行总价原始数值 |
-| obj.valueString | string | 是 | 格式化交易行总价 |
-| obj.actualProfit | integer(int64) | 是 | 扣除费用后的实际利润 |
-| obj.actualProfitString | string | 是 | 格式化实际利润 |
-| obj.requiredMap | object | 是 | 所需材料映射，键由材料计算结果生成 |
-| obj.requiredMap.&lt;key&gt; | object | 是 | 单种材料信息 |
-| obj.requiredMap.&lt;key&gt;.id | string | 是 | 材料 ID |
-| obj.requiredMap.&lt;key&gt;.name | string | 是 | 材料名称 |
-| obj.requiredMap.&lt;key&gt;.number | integer | 是 | 材料总需求数量 |
-| obj.requiredMap.&lt;key&gt;.value | integer(int64) | 是 | 该材料总价原始数值 |
-| obj.requiredMap.&lt;key&gt;.valueString | string | 是 | 该材料格式化总价 |
-| obj.makeDetail | object[] | 是 | 制作批次明细；当前计算路径未填充，示例返回 null |
-| obj.makeDetail[].no | integer | 是 | 制作批次序号 |
-| obj.makeDetail[].name | string | 是 | 制作物品名称 |
-| obj.makeDetail[].makeNumber | integer | 是 | 本批产出数量 |
-| obj.type | string | 是 | COOKING / TAILORING / MEDICINE / FOUNDING / FURNITURE |
-| obj.formulaName | string | 是 | 技艺制品名称 |
-| obj.materialId | string | 是 | 成品材料 ID |
-| obj.number | integer | 是 | 请求需求数量 |
-| obj.actualNumber | integer | 是 | 实际产出数量 |
-
-#### 响应示例
+| formulaName | string | 是 | 配方名称；去除首尾空白及外围方括号 |
+| number | integer | 是 | 主产物目标数量，至少 1；普通品与精制品分别计数 |
+| server | string / null | 否 | null 或空字符串使用默认服务器 |
+| calculationMode | string / null | 否 | `EXPECTED` / `RANDOM` / `MINIMUM`，优先于旧参数 |
+| rangeCreate | boolean / null | 否 | 旧参数：true 对应 RANDOM，false 对应 MINIMUM；两参数均省略时为 EXPECTED |
 
 ```json
 {
-  "success": true,
-  "code": 200,
-  "msg": "请求成功",
-  "obj": {
-    "server": "剑胆琴心",
-    "energies": 20,
-    "cost": 12500,
-    "costString": "1金25银",
-    "value": 30000,
-    "valueString": "3金",
-    "actualProfit": 8000,
-    "actualProfitString": "80银",
-    "requiredMap": {
-      "示例材料": {
-        "id": "10001",
-        "name": "示例材料",
-        "number": 4,
-        "value": 12500,
-        "valueString": "1金25银"
-      }
-    },
-    "makeDetail": null,
-    "type": "COOKING",
-    "formulaName": "示例配方",
-    "materialId": "20001",
-    "number": 2,
-    "actualNumber": 2
-  }
+  "formulaName": "云芝竹沥羹",
+  "number": 100,
+  "server": "剑胆琴心",
+  "calculationMode": "EXPECTED"
 }
 ```
 
-**调用说明：** 示例按 5% 手续费及 8000 铜保管费计算，实际金额取决于服务配置和市场报价。当前响应未填充 makeDetail；所有金额和名称按本次计算结果返回。部分价格查询失败可能体现为 0，0 不能视为上游价格已核实。
+`EXPECTED` 使用配方表概率，不计技艺等级修正。单次期望产量为 `概率 × (最小产量 + 最大产量) / 2`；制作次数是目标数量除以主产物单次期望产量后向上取整。期望达到目标不代表本次必定达到。
+
+`RANDOM`、`MINIMUM` 保留旧数量口径：只对普通主产物的数量做随机模拟或取最小值，不将特殊产物计入收益；其他可能产物仍在配方详情中返回。
+
+#### 响应
+
+沿用 `R` 包装：`success`、`code`、`msg`、`obj`。报价不完整仍会返回已查明的配方和小计；调用方必须查看完整性字段，不能把 null 当成零。单项查询的 `formula` 是配方单耗；`makeDetail` 包含根配方与中间材料的制作汇总。
+
+| obj 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| server / calculationMode | string | 本次实际使用的服务器和计算模式 |
+| formulaName / materialId / type | string | 配方名称、主产物 ID、技艺类型 |
+| number | integer | 主产物目标数量 |
+| times | integer / null | 预计制作次数；主产物概率未知时为 null |
+| expectedNumber | integer / null | EXPECTED 的主产物总期望产量向下取整，内部消耗另见 outputs |
+| actualNumber | integer / null | 仅旧数量模式返回，EXPECTED 为 null |
+| energies | integer / null | 包含中间材料制作的精力总数；未折算金币 |
+| estimateComplete | boolean | 是否能计算目标数量的制作计划 |
+| costComplete / valueComplete | boolean | 成本、产物参考收益是否完整 |
+| cost / costString | int64 / string / null | 完整材料成本及格式化文本；缺价则为 null |
+| value / valueString | int64 / string / null | 完整参考收益；任何非零可能产物缺价或概率未知则为 null |
+| actualProfit / actualProfitString | int64 / string / null | 预期利润；为兼容保留旧字段名，仅成本、收益均完整时返回 |
+| knownCost / knownCostString | int64 / string / null | 已确认材料成本小计；无法生成制作计划时为 null |
+| knownValue / knownValueString | int64 / string / null | 已计价产物收益小计；无法生成制作计划时为 null |
+| feeRate / custodyFee | decimal / int64 | 手续费率（默认 0.05）和每次预测保管费（8,000 铜） |
+| requiredMap | object | 按**物品 ID**索引的基础材料采购清单，不能再把键当作物品名称 |
+| formula | object | 当前配方单耗及全部可能产物 |
+| makeDetail | object[] | 按配方汇总的制作明细，见下文 |
+| outputs | object[] | 按物品 ID 汇总的产物及内部消耗、可出售余量、估值 |
+| notes | string[] | 概率口径、报价和绑定／拆解限制说明 |
+
+所有层级的 `expectedNumber` 和 `availableNumber` 均在计算完成后向下取整返回 JSON 整数，未知值仍为 null；例如 100.8 返回 100、4.2 返回 4、0.6 返回 0。制作次数、内部消耗和收益计算保留原始期望值，因此整数展示数量乘单价可能不等于返回的期望收益。取整为 0 不表示该产物不可能产出，也不免除缺价标记。
+
+所有价格单位为铜。期望收益保留十进制精度，合计及扣费后才取整到铜；各产物展示金额会单独取整，展示分项之和可能与合计相差少量铜。
+
+**配方 `formula`：** `id`、`formulaName`、`type`、`materialId`、`energies`、`createMin`、`createMax`、`requireLevel`、`recipeLevel`、`needExpertise`、`items`、`outputs`。`items` 为单次消耗材料。`outputs` 每项包含 `slot`、`id`、`name`、`quality`、`bindType`、`desc`、`createMin`、`createMax`、`probabilityWeight`、`probability`；概率使用原权重除以 1,048,576，未知保持 null。绑定类型和描述按上游原数据返回，不把拆解回收计入收益。
+
+**采购材料 `requiredMap.<itemId>`：** `id`、`name`、`number`、`value`、`valueString`、`quote`。`quote` 包含 `status`、`value`、`unitPrice`、`estimatedNumber`、`estimatedUnitPrice`。
+
+| quote.status | 含义 |
+| --- | --- |
+| VENDOR | 使用已确认商店单价 |
+| MARKET | 交易行上架量足够，按单价升序累计购买 |
+| EXTRAPOLATED | 当前挂单不足，缺口按最后一档有效挂单单价补估 |
+| MISSING | 没有有效挂单，金额为 null |
+| ERROR | 报价失败，金额为 null |
+| TIMEOUT | 报价超时，金额为 null |
+
+例如需要 10 个材料，现有 3 个单价 100、2 个单价 120，缺口 5 个按 120 补估：`value=1140`、`estimatedNumber=5`、`estimatedUnitPrice=120`、`status=EXTRAPOLATED`。完全没有挂单时没有最后一档价格，不作零价补估。
+
+**产物预测 `outputs[]`：** `id`、`name`、`expectedNumber`、`actualNumber`、`consumedNumber`、`availableNumber`、`priceStatus`、`unitPrice`、`value`、`valueString`。`availableNumber` 是总产量扣除中间制作消耗后的余量；完全内部消耗的产物不查询出售价格。旧模式以实际模拟数量填充产物列表的数量字段，并提供 `actualNumber`；顶层 `expectedNumber` 仍为 null。未知概率导致余量未知时，`availableNumber` 为 null；概率为零导致余量为零时不构成缺价。
+
+产物估值使用当前最低有效挂牌单价乘以余量，不代表真实成交价；材料缺货补价不用于推算卖价。玄元帽鞋估值仅适用于可交易成品，不自动推断使用绑定材料的情况。
+
+**制作明细 `makeDetail[]`：** `no`、`name`、`times`、`expectedNumber`、`makeNumber`、`formula`。`makeNumber` 仅旧模式有值。某个必要配方主产物概率缺失或为零时，`estimateComplete=false`，保留各 `formula` 的单耗和可能产物，不生成目标总消耗与利润。
+
+配方目录和详情使用 `box:manufactures:v2:*` 缓存，24 小时过期；商店价格使用 `box:craft:v2:prices`，24 小时过期。成本结果缓存键带 `v3`、方法名和实际计算模式，沿用现有短期 TTL（默认三分钟），命中不延长有效期，且不缓存不完整结果。旧缓存不会参与新计算。
 
 ### 4.2 查询多个技艺制品成本
 
-**接口：`POST /costing/list`**
+**接口：`POST /costing/list`**，无需 Token。
 
-**鉴权：** 无需 Token。
-
-#### 请求参数
-
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- | --- |
-| Content-Type | header | string | 是 | application/json |
-| server | body | string / null | 否 | null 或空字符串使用服务端默认服务器；仅空白字符串不会被视为缺省 |
-| rangeCreate | body | boolean / null | 否 | 是否按随机产出数量计算；省略或 null 默认为 true |
-| items | body | object[] | 是 | 清单明细；当前只校验非 null，空数组未被拒绝 |
-| items[].formulaName | body | string | 是 | 配方名称，不应为空白 |
-| items[].number | body | integer | 是 | 需求数量，应为至少 1 的整数 |
-
-#### 请求示例
-
-```http
-POST /costing/list HTTP/1.1
-Host: <host>:9002
-Content-Type: application/json
-
+```json
 {
   "server": "剑胆琴心",
-  "rangeCreate": true,
+  "calculationMode": "EXPECTED",
   "items": [
-    {
-      "formulaName": "示例配方",
-      "number": 2
-    }
+    {"formulaName": "云芝竹沥羹", "number": 100},
+    {"formulaName": "竹沥清心露", "number": 100}
   ]
 }
 ```
 
-#### 响应参数
+`items` 必须为非空数组，子项不能为 null，且分别校验配方名称与正整数数量。名称标准化后重复的配方合并目标数量。`server`、`calculationMode`、`rangeCreate` 含义与单项接口相同。
 
-成功 HTTP 状态：200。
-
-| 字段 | 类型 | 可空 | 说明 |
-| --- | --- | --- | --- |
-| success | boolean | 否 | 成功时为 true |
-| code | integer | 否 | 成功时为 200 |
-| msg | string | 否 | 成功时为“请求成功” |
-| obj | object | 否 | 本接口业务对象 |
-| obj.server | string | 是 | 服务器名称 |
-| obj.energies | integer | 是 | 预计总精力 |
-| obj.cost | integer(int64) | 是 | 材料总成本原始数值 |
-| obj.costString | string | 是 | 格式化总成本 |
-| obj.value | integer(int64) | 是 | 交易行总价原始数值 |
-| obj.valueString | string | 是 | 格式化交易行总价 |
-| obj.actualProfit | integer(int64) | 是 | 扣除费用后的实际利润 |
-| obj.actualProfitString | string | 是 | 格式化实际利润 |
-| obj.requiredMap | object | 是 | 所需材料映射，键由材料计算结果生成 |
-| obj.requiredMap.&lt;key&gt; | object | 是 | 单种材料信息 |
-| obj.requiredMap.&lt;key&gt;.id | string | 是 | 材料 ID |
-| obj.requiredMap.&lt;key&gt;.name | string | 是 | 材料名称 |
-| obj.requiredMap.&lt;key&gt;.number | integer | 是 | 材料总需求数量 |
-| obj.requiredMap.&lt;key&gt;.value | integer(int64) | 是 | 该材料总价原始数值 |
-| obj.requiredMap.&lt;key&gt;.valueString | string | 是 | 该材料格式化总价 |
-| obj.makeDetail | object[] | 是 | 制作批次明细；当前计算路径未填充，示例返回 null |
-| obj.makeDetail[].no | integer | 是 | 制作批次序号 |
-| obj.makeDetail[].name | string | 是 | 制作物品名称 |
-| obj.makeDetail[].makeNumber | integer | 是 | 本批产出数量 |
-| obj.formulas | object | 是 | 按请求 formulaName 为键的成品映射 |
-| obj.formulas.&lt;name&gt; | object | 是 | 单个成品结果 |
-| obj.formulas.&lt;name&gt;.type | string | 是 | COOKING / TAILORING / MEDICINE / FOUNDING / FURNITURE |
-| obj.formulas.&lt;name&gt;.formulaName | string | 是 | 技艺制品名称 |
-| obj.formulas.&lt;name&gt;.materialId | string | 是 | 成品材料 ID |
-| obj.formulas.&lt;name&gt;.number | integer | 是 | 请求需求数量 |
-| obj.formulas.&lt;name&gt;.actualNumber | integer | 是 | 实际产出数量 |
-
-#### 响应示例
-
-```json
-{
-  "success": true,
-  "code": 200,
-  "msg": "请求成功",
-  "obj": {
-    "server": "剑胆琴心",
-    "energies": 20,
-    "cost": 12500,
-    "costString": "1金25银",
-    "value": 30000,
-    "valueString": "3金",
-    "actualProfit": 8000,
-    "actualProfitString": "80银",
-    "requiredMap": {
-      "示例材料": {
-        "id": "10001",
-        "name": "示例材料",
-        "number": 4,
-        "value": 12500,
-        "valueString": "1金25银"
-      }
-    },
-    "makeDetail": null,
-    "formulas": {
-      "示例配方": {
-        "type": "COOKING",
-        "formulaName": "示例配方",
-        "materialId": "20001",
-        "number": 2,
-        "actualNumber": 2
-      }
-    }
-  }
-}
-```
-
-**调用说明：** items 的元素目前未启用级联校验，调用方应保证子项参数合法。同名配方键以后处理的结果为准。makeDetail 当前为 null；示例按 5% 手续费及 8000 铜保管费计算。
+共同响应字段与 4.1 相同。单项的 `formulaName`、`materialId`、`type`、`number`、`actualNumber`、`expectedNumber`、`times`、`formula` 放在 `obj.formulas.<标准化配方名>` 下。所有父配方的中间材料需求汇总后再计算其制作次数，避免不同深度依赖重复取整或互相覆盖。总收益只计算扣除内部消耗后的产物余量；每次清单预测仍只扣一次 8,000 铜保管费。
 
 ### 4.3 JX3API 代理
 

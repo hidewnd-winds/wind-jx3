@@ -123,4 +123,9 @@ public class CostCalculator {
                feeRate.compareTo(BigDecimal.ZERO) >= 0 &&
                feeRate.compareTo(BigDecimal.ONE) <= 0;
     }
+    /** 期望收益保留小数铜，合计并扣费后才取整。 */
+    public static long calculateProfit(BigDecimal tradingPrice, long cost, BigDecimal feeRate, long custodyFee) {
+        return tradingPrice.multiply(BigDecimal.ONE.subtract(feeRate)).subtract(BigDecimal.valueOf(cost))
+                .subtract(BigDecimal.valueOf(custodyFee)).setScale(0, RoundingMode.HALF_UP).longValueExact();
+    }
 }

@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.io.Serializable;
+import com.hidewnd.winds.costing.costant.CalculationMode;
 
 @Data
 @Schema(description = "技艺成本查询体")
@@ -15,7 +16,9 @@ public class CostItemRequest extends CostItem implements Serializable {
     private String server;
 
 
-    @Schema(description = "是否随机产出数量, 默认为True")
+    @Schema(description = "旧参数：true随机、false最低产量；两个模式参数均省略时使用期望值")
     private Boolean rangeCreate;
 
+    @Schema(description = "EXPECTED期望值、RANDOM随机、MINIMUM最低产量；优先于rangeCreate")
+    private CalculationMode calculationMode;
 }

@@ -1,8 +1,5 @@
 package com.hidewnd.winds.costing.handler;
 
-import cn.hutool.core.util.StrUtil;
-import com.hidewnd.winds.common.base.CommonException;
-import com.hidewnd.winds.common.base.response.R;
 import com.hidewnd.winds.costing.dto.Formulas;
 import com.hidewnd.winds.costing.service.Jx3BoxRemote;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,10 +16,6 @@ public class DefaultFormulaParseAdapterImpl implements FormulaParseAdapter {
 
     @Override
     public Formulas parse(String formulaName) {
-        Formulas formulas = jx3BoxRemote.queryFormulasAndNumber(null, formulaName);
-        if (formulas == null) {
-            throw new CommonException(R.CODE_PARAM_ERROR, StrUtil.format("配方不存在: {}", formulaName));
-        }
-        return formulas;
+        return jx3BoxRemote.queryFormulasAndNumber(null, formulaName);
     }
 }

@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 
 @Data
 public class CostResultItem implements Serializable {
@@ -23,4 +24,8 @@ public class CostResultItem implements Serializable {
 
     @Schema(description = "实际产出数量")
     private Integer actualNumber;
+    @Schema(type = "integer", description = "期望产量，响应时向下取整；计算使用未取整值")
+    private BigDecimal expectedNumber;
+    private Integer times;
+    private Formulas formula;
 }

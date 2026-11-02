@@ -4,6 +4,8 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.alibaba.fastjson2.JSONArray;
 import com.hidewnd.winds.costing.dto.request.CostItemRequest;
+import com.hidewnd.winds.costing.costant.CalculationMode;
+import com.hidewnd.winds.costing.handler.FormulaBuilder;
 import com.hidewnd.winds.costing.dto.request.CostListRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.EnableCaching;
@@ -39,7 +41,6 @@ public class CacheConfig {
     @Bean
     public RedisCacheManager redisCacheManager(RedisConnectionFactory factory) {
         RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig()
-                .enableTimeToIdle()
                 .entryTtl(Duration.ofMillis(liveTime))
                 .serializeValuesWith(RedisSerializationContext.SerializationPair
                         .fromSerializer(new GenericJackson2JsonRedisSerializer()))
@@ -63,27 +64,25 @@ public class CacheConfig {
             public Object generate(@NonNull Object target, @NonNull Method method, @NonNull Object... params) {
                 String key = DigestUtil.sha1Hex(JSONArray.toJSONString(params));
                 if (params[0] instanceof CostItemRequest request) {
-                    String formulaName = request.getFormulaName()
-                            .replaceFirst("\\[", "")
-                            .replaceFirst("]", "");
+                    String formulaName = FormulaBuilder.normalizeFormulaName(request.getFormulaName());
                     String server = StrUtil.emptyToDefault(request.getServer(), defaultServer);
                     int number = request.getNumber() == null ? 1 : request.getNumber();
-                    boolean rangeCreate = request.getRangeCreate() == null ? Boolean.TRUE : request.getRangeCreate();
+                    CalculationMode mode = CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate());
                     Map<String, Object> map = new HashMap<>();
                     map.put("formulaName", formulaName);
                     map.put("number", number);
-                    map.put("rangeCreate", rangeCreate);
+                    map.put("calculationMode", mode);
                     key = StrUtil.format("{}_{}", server, DigestUtil.sha1Hex(JSONArray.toJSONString(map)));
                 }
                 if (params[0] instanceof CostListRequest request) {
                     String server = StrUtil.emptyToDefault(request.getServer(), defaultServer);
-                    boolean rangeCreate = request.getRangeCreate() == null ? Boolean.TRUE : request.getRangeCreate();
+                    CalculationMode mode = CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate());
                     Map<String, Object> map = new HashMap<>();
                     map.put("items", request.getItems());
-                    map.put("rangeCreate", rangeCreate);
+                    map.put("calculationMode", mode);
                     key = StrUtil.format("{}_{}", server, DigestUtil.sha1Hex(JSONArray.toJSONString(map)));
                 }
-                return key;
+                return "v3:" + method.getName() + ":" + key;
             }
         };
     }

@@ -15,6 +15,9 @@ public class Material implements Serializable {
     @Schema(description = "材料名称")
     private String name;
 
+    private Integer quality;
+    private Integer bindType;
+
     @Schema(description = "所需材料数量")
     private Integer number;
 
@@ -24,9 +27,8 @@ public class Material implements Serializable {
     @Schema(description = "材料价格格式化")
     private String valueString;
 
-    @JsonIgnore
-    @Schema(description = "中间产物 配方信息")
-    private Formulas formulas;
+    @Schema(description = "本次材料报价和缺货补估信息")
+    private PriceQuote quote;
 
     @JsonIgnore
     private String uiId;

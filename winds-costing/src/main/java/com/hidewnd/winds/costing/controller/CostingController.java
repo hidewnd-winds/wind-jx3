@@ -41,14 +41,16 @@ public class CostingController {
 
     @PostMapping("/one")
     @Operation(summary = "查询单个技艺制品成本")
-    @Cacheable(cacheNames = {"item"}, keyGenerator = "costingKeyGenerator")
+    @Cacheable(cacheNames = {"item"}, keyGenerator = "costingKeyGenerator",
+            unless = "#result.obj == null || !#result.obj.estimateComplete || !#result.obj.costComplete || !#result.obj.valueComplete")
     public R<CostItemResult> costValue(@Validated(RequestModel.class) @RequestBody CostItemRequest request) {
         return costingService.queryCosting(request);
     }
 
     @PostMapping("/list")
     @Operation(summary = "查询多个技艺制品成本")
-    @Cacheable(cacheNames = {"item"}, keyGenerator = "costingKeyGenerator")
+    @Cacheable(cacheNames = {"item"}, keyGenerator = "costingKeyGenerator",
+            unless = "#result.obj == null || !#result.obj.estimateComplete || !#result.obj.costComplete || !#result.obj.valueComplete")
     public R<CostListResult> costValueList(@Validated(RequestModel.class) @RequestBody CostListRequest request) {
         return costingService.queryCostingList(request);
     }

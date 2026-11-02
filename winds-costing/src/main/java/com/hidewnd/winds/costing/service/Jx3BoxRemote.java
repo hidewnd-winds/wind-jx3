@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.hidewnd.winds.costing.costant.FormulasEnum;
 import com.hidewnd.winds.costing.dto.Formulas;
 import com.hidewnd.winds.costing.dto.Material;
+import com.hidewnd.winds.costing.dto.PriceQuote;
 
 /**
  * Jx3BoxRemote接口
@@ -34,9 +35,11 @@ public interface Jx3BoxRemote {
      * @param server 服务器
      * @param itemId 材料ID
      * @param number 数量
-     * @return decimal  BigDecimal.ZERO if null
+     * @return 报价状态及金额，缺价不返回零
      */
-    long queryPrice(String server, String itemId, int number);
+    PriceQuote queryPrice(String server, String itemId, int number);
+
+    Long queryVendorPrice(String itemId);
 
 
     /**

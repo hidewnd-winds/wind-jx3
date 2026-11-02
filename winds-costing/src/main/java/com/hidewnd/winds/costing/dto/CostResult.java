@@ -4,6 +4,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
+import com.hidewnd.winds.costing.costant.CalculationMode;
 import java.util.List;
 import java.util.Map;
 
@@ -29,10 +31,10 @@ public class CostResult implements Serializable {
     @Schema(description = "合计交易行价格式化")
     private String valueString;
 
-    @Schema(description = "实际利润")
+    @Schema(description = "预期利润")
     private Long actualProfit;
 
-    @Schema(description = "实际利润格式化")
+    @Schema(description = "预期利润格式化")
     private String actualProfitString;
 
     @Schema(description = "合计所需材料数量")
@@ -40,4 +42,16 @@ public class CostResult implements Serializable {
 
     @Schema(description = "制作明细")
     private List<CostDetailDto> makeDetail;
+    private CalculationMode calculationMode;
+    private boolean estimateComplete;
+    private boolean costComplete;
+    private boolean valueComplete;
+    private Long knownCost;
+    private String knownCostString;
+    private Long knownValue;
+    private String knownValueString;
+    private BigDecimal feeRate;
+    private Long custodyFee;
+    private List<OutputEstimate> outputs;
+    private List<String> notes;
 }
