@@ -37,7 +37,10 @@ import java.time.Duration;
 @ConditionalOnProperty(prefix = "winds.jx3", name = "enabled", havingValue = "true")
 @EnableConfigurationProperties({Jx3Properties.class, Jx3ApiSocketProperties.class, EarthquakeProperties.class})
 public class Jx3Configuration {
-    @Bean(destroyMethod = "shutdownNow")
+    // 从公开 API 类解析销毁方法，避免反射访问 JDK 未导出的 HttpClientFacade。
+    // Spring 6.1 支持完整方法名，但 IDEA 的销毁方法检查无法识别此写法。
+    //noinspection ContextJavaBeanUnresolvedMethodsInspection
+    @Bean(destroyMethod = "java.net.http.HttpClient.shutdownNow")
     @ConditionalOnMissingBean(name = "jx3ApiHttpClient")
     public HttpClient jx3ApiHttpClient(@Qualifier("asyncTaskExecutor") AsyncTaskExecutor executor) {
         return HttpClient.newBuilder().executor(executor).connectTimeout(Duration.ofSeconds(10)).build();
