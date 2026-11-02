@@ -992,6 +992,7 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 | formulaName | string | 是 | 配方名称；去除首尾空白及外围方括号 |
 | number | integer | 是 | 主产物目标数量，至少 1；普通品与精制品分别计数 |
 | server | string / null | 否 | null 或空字符串使用默认服务器 |
+| professionLevel | integer | 否 | 技艺等级0～50，省略默认50；显式null、越界或非整数返回参数错误 |
 | calculationMode | string / null | 否 | `EXPECTED` / `RANDOM` / `MINIMUM`，优先于旧参数 |
 | rangeCreate | boolean / null | 否 | 旧参数：true 对应 RANDOM，false 对应 MINIMUM；两参数均省略时为 EXPECTED |
 
@@ -1000,13 +1001,28 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
   "formulaName": "云芝竹沥羹",
   "number": 100,
   "server": "剑胆琴心",
+  "professionLevel": 50,
   "calculationMode": "EXPECTED"
 }
 ```
 
-`EXPECTED` 使用配方表概率，不计技艺等级修正。单次期望产量为 `概率 × (最小产量 + 最大产量) / 2`；制作次数是目标数量除以主产物单次期望产量后向上取整。期望达到目标不代表本次必定达到。
+`EXPECTED` 在配方表基础概率上累加技艺等级加成。等级省略时按50级计算，因此旧调用的默认估值也会变化；显式传0可使用原来的无等级加成口径。清单及全部中间配方统一使用本次等级，不按配方要求等级拒绝预估。
 
-`RANDOM`、`MINIMUM` 保留旧数量口径：只对普通主产物的数量做随机模拟或取最小值，不将特殊产物计入收益；其他可能产物仍在配方详情中返回。
+| 技艺等级 | 幸运累计加成L | 特殊产物累计加成S |
+| --- | --- | --- |
+| 0～29 | 0 | 0 |
+| 30～34 | 31/1024 | 0 |
+| 35～39 | 31/1024 | 31/1024 |
+| 40～44 | 62/1024 | 31/1024 |
+| 45～50 | 62/1024 | 62/1024 |
+
+`31/1024 = 0.0302734375`，对应3.02734375个百分点；`62/1024 = 0.060546875`，对应6.0546875个百分点。等级视为已取得对应档位的累计加成，不另外判断突破状态。
+
+本接口使用约定的估算模型，并非已核实的游戏完整结算公式：单次平均数量 `Q = (最小数量 + 最大数量) / 2 + L × (最大数量 − 最小数量)`；主产物保留基础概率，其余产物共享总加成S，按原概率比例分配，`Pᵢ' = min(1, Pᵢ + S × Pᵢ / ΣP特殊)`。不扣减普通产物概率，也不把产物概率总和重新归一化为100%。50级、基础特殊概率4%、数量2～3个时，特殊概率为10.0546875%，平均数量为2.560546875；固定数量不受幸运加成影响。
+
+单次期望产量为 `修正概率 × Q`；制作次数是目标数量除以主产物单次期望产量后向上取整。无特殊槽位时不新增产物，特殊概率全为零时保持零；特殊组存在缺失概率且需要分配等级加成时，该组修正期望均未知，收益标记为不完整。期望达到目标不代表本次必定达到。
+
+`RANDOM`、`MINIMUM` 保留旧数量口径：只对普通主产物的数量做随机模拟或取最小值，不将特殊产物计入收益，技艺等级加成未参与计算，响应的两类加成为0；其他可能产物仍在配方详情中返回。
 
 #### 响应
 
@@ -1015,6 +1031,8 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 | obj 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | server / calculationMode | string | 本次实际使用的服务器和计算模式 |
+| professionLevel | integer | 本次使用的技艺等级 |
+| luckyOutputAddRate / specialItemAddRate | decimal | 本次幸运／特殊产物累计加成，以0至1表示；旧数量模式为0 |
 | formulaName / materialId / type | string | 配方名称、主产物 ID、技艺类型 |
 | number | integer | 主产物目标数量 |
 | times | integer / null | 预计制作次数；主产物概率未知时为 null |
@@ -1039,7 +1057,7 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 
 所有价格单位为铜。期望收益保留十进制精度，合计及扣费后才取整到铜；各产物展示金额会单独取整，展示分项之和可能与合计相差少量铜。
 
-**配方 `formula`：** `id`、`formulaName`、`type`、`materialId`、`energies`、`createMin`、`createMax`、`requireLevel`、`recipeLevel`、`needExpertise`、`items`、`outputs`。`items` 为单次消耗材料。`outputs` 每项包含 `slot`、`id`、`name`、`quality`、`bindType`、`desc`、`createMin`、`createMax`、`probabilityWeight`、`probability`；概率使用原权重除以 1,048,576，未知保持 null。绑定类型和描述按上游原数据返回，不把拆解回收计入收益。
+**配方 `formula`：** `id`、`formulaName`、`type`、`materialId`、`energies`、`createMin`、`createMax`、`requireLevel`、`recipeLevel`、`needExpertise`、`items`、`outputs`。`items` 为单次消耗材料。`outputs` 每项包含 `slot`、`id`、`name`、`quality`、`bindType`、`desc`、`createMin`、`createMax`、`probabilityWeight`、`probability`；概率使用原权重除以 1,048,576，未知保持 null。这里的`probability`始终是未计等级修正的基础概率；等级修正仅在请求内计算期望值，不写入共享配方缓存。绑定类型和描述按上游原数据返回，不把拆解回收计入收益。
 
 **采购材料 `requiredMap.<itemId>`：** `id`、`name`、`number`、`value`、`valueString`、`quote`。`quote` 包含 `status`、`value`、`unitPrice`、`estimatedNumber`、`estimatedUnitPrice`。
 
@@ -1060,7 +1078,7 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 
 **制作明细 `makeDetail[]`：** `no`、`name`、`times`、`expectedNumber`、`makeNumber`、`formula`。`makeNumber` 仅旧模式有值。某个必要配方主产物概率缺失或为零时，`estimateComplete=false`，保留各 `formula` 的单耗和可能产物，不生成目标总消耗与利润。
 
-配方目录和详情使用 `box:manufactures:v2:*` 缓存，24 小时过期；商店价格使用 `box:craft:v2:prices`，24 小时过期。成本结果缓存键带 `v3`、方法名和实际计算模式，沿用现有短期 TTL（默认三分钟），命中不延长有效期，且不缓存不完整结果。旧缓存不会参与新计算。
+配方目录和详情使用 `box:manufactures:v2:*` 缓存，24 小时过期；商店价格使用 `box:craft:v2:prices`，24 小时过期。成本结果缓存键带 `v4`、方法名、实际技艺等级和计算模式；等级省略与显式50使用相同键，其他等级分别隔离。沿用现有短期 TTL（默认三分钟），命中不延长有效期，且不缓存不完整结果。旧缓存不会参与新计算。
 
 ### 4.2 查询多个技艺制品成本
 
@@ -1069,6 +1087,7 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 ```json
 {
   "server": "剑胆琴心",
+  "professionLevel": 50,
   "calculationMode": "EXPECTED",
   "items": [
     {"formulaName": "云芝竹沥羹", "number": 100},
@@ -1077,7 +1096,7 @@ Authorization: Bearer <MANAGEMENT_TOKEN>
 }
 ```
 
-`items` 必须为非空数组，子项不能为 null，且分别校验配方名称与正整数数量。名称标准化后重复的配方合并目标数量。`server`、`calculationMode`、`rangeCreate` 含义与单项接口相同。
+`items` 必须为非空数组，子项不能为 null，且分别校验配方名称与正整数数量。名称标准化后重复的配方合并目标数量。`server`、`professionLevel`、`calculationMode`、`rangeCreate` 含义与单项接口相同；`professionLevel`位于清单顶层，统一作用于清单及中间制作。
 
 共同响应字段与 4.1 相同。单项的 `formulaName`、`materialId`、`type`、`number`、`actualNumber`、`expectedNumber`、`times`、`formula` 放在 `obj.formulas.<标准化配方名>` 下。所有父配方的中间材料需求汇总后再计算其制作次数，避免不同深度依赖重复取整或互相覆盖。总收益只计算扣除内部消耗后的产物余量；每次清单预测仍只扣一次 8,000 铜保管费。
 

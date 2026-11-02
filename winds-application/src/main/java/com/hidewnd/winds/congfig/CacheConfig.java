@@ -71,6 +71,7 @@ public class CacheConfig {
                     Map<String, Object> map = new HashMap<>();
                     map.put("formulaName", formulaName);
                     map.put("number", number);
+                    map.put("professionLevel", request.getProfessionLevel());
                     map.put("calculationMode", mode);
                     key = StrUtil.format("{}_{}", server, DigestUtil.sha1Hex(JSONArray.toJSONString(map)));
                 }
@@ -79,10 +80,11 @@ public class CacheConfig {
                     CalculationMode mode = CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate());
                     Map<String, Object> map = new HashMap<>();
                     map.put("items", request.getItems());
+                    map.put("professionLevel", request.getProfessionLevel());
                     map.put("calculationMode", mode);
                     key = StrUtil.format("{}_{}", server, DigestUtil.sha1Hex(JSONArray.toJSONString(map)));
                 }
-                return "v3:" + method.getName() + ":" + key;
+                return "v4:" + method.getName() + ":" + key;
             }
         };
     }

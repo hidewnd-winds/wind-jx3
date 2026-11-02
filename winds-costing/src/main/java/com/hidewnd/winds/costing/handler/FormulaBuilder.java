@@ -9,6 +9,7 @@ import com.hidewnd.winds.costing.dto.*;
 import lombok.Getter;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.math.RoundingMode;
 import java.util.*;
 
@@ -16,6 +17,12 @@ import java.util.*;
 public class FormulaBuilder {
     @Getter
     private final CalculationMode mode;
+    @Getter
+    private final int professionLevel;
+    @Getter
+    private final BigDecimal luckyOutputAddRate;
+    @Getter
+    private final BigDecimal specialItemAddRate;
     @Getter
     private final Map<String, Integer> numberMap = new LinkedHashMap<>();
     private final Map<String, Formulas> roots = new LinkedHashMap<>();
@@ -34,12 +41,20 @@ public class FormulaBuilder {
     @Getter
     private boolean estimateComplete = true;
 
-    private FormulaBuilder(CalculationMode mode) {
+    private FormulaBuilder(CalculationMode mode, int professionLevel) {
         this.mode = mode;
+        this.professionLevel = professionLevel;
+        BigDecimal step = BigDecimal.valueOf(31).divide(BigDecimal.valueOf(1024));
+        luckyOutputAddRate = mode == CalculationMode.EXPECTED
+                ? step.multiply(BigDecimal.valueOf((professionLevel >= 30 ? 1 : 0) + (professionLevel >= 40 ? 1 : 0)))
+                : BigDecimal.ZERO;
+        specialItemAddRate = mode == CalculationMode.EXPECTED
+                ? step.multiply(BigDecimal.valueOf((professionLevel >= 35 ? 1 : 0) + (professionLevel >= 45 ? 1 : 0)))
+                : BigDecimal.ZERO;
     }
 
-    public static FormulaBuilder create(CalculationMode mode) {
-        return new FormulaBuilder(mode);
+    public static FormulaBuilder create(CalculationMode mode, int professionLevel) {
+        return new FormulaBuilder(mode, professionLevel);
     }
 
     public FormulaBuilder addFormula(String name, Integer number) {
@@ -121,10 +136,34 @@ public class FormulaBuilder {
             int times;
             Integer actual = null;
             BigDecimal expected = null;
+            Map<Integer, BigDecimal> expectedPerCraft = new HashMap<>();
             if (mode == CalculationMode.EXPECTED) {
-                FormulaOutput primary = formula.getOutputs().getFirst();
-                BigDecimal perCraft = primary.getProbability().multiply(BigDecimal.valueOf(
-                        (long) primary.getCreateMin() + primary.getCreateMax())).divide(BigDecimal.valueOf(2));
+                BigDecimal specialProbability = BigDecimal.ZERO;
+                boolean specialComplete = true;
+                for (FormulaOutput output : formula.getOutputs()) {
+                    if (output.getSlot() == 1) continue;
+                    if (output.getProbability() == null) specialComplete = false;
+                    else specialProbability = specialProbability.add(output.getProbability());
+                }
+                if (!specialComplete && specialItemAddRate.signum() > 0) {
+                    notes.add(formula.getFormulaName() + "的特殊产物概率不完整，无法分配技艺等级加成，特殊产物期望保持未知。");
+                }
+                for (FormulaOutput output : formula.getOutputs()) {
+                    BigDecimal probability = output.getProbability();
+                    if (output.getSlot() != 1 && specialItemAddRate.signum() > 0) {
+                        // 等级加成按原比例分给特殊产物，不扣减主产物，也不对所有产物重新归一化。
+                        if (!specialComplete) probability = null;
+                        else if (specialProbability.signum() > 0) {
+                            probability = probability.add(specialItemAddRate.multiply(probability)
+                                    .divide(specialProbability, MathContext.DECIMAL128)).min(BigDecimal.ONE);
+                        }
+                    }
+                    BigDecimal mean = BigDecimal.valueOf((long) output.getCreateMin() + output.getCreateMax())
+                            .divide(BigDecimal.valueOf(2))
+                            .add(luckyOutputAddRate.multiply(BigDecimal.valueOf((long) output.getCreateMax() - output.getCreateMin())));
+                    expectedPerCraft.put(output.getSlot(), probability == null ? null : probability.multiply(mean));
+                }
+                BigDecimal perCraft = expectedPerCraft.get(1);
                 times = BigDecimal.valueOf(required).divide(perCraft, 0, RoundingMode.CEILING).intValueExact();
                 expected = perCraft.multiply(BigDecimal.valueOf(times));
             } else {
@@ -153,9 +192,8 @@ public class FormulaBuilder {
                 // 旧模式保持“只模拟主产物数量”的口径；其他可能产物仍在配方详情中返回。
                 if (mode != CalculationMode.EXPECTED && output.getSlot() != 1) continue;
                 BigDecimal produced = mode == CalculationMode.EXPECTED
-                        ? (output.getProbability() == null ? null : output.getProbability()
-                            .multiply(BigDecimal.valueOf((long) output.getCreateMin() + output.getCreateMax()))
-                            .multiply(BigDecimal.valueOf(times)).divide(BigDecimal.valueOf(2)))
+                        ? (expectedPerCraft.get(output.getSlot()) == null ? null
+                            : expectedPerCraft.get(output.getSlot()).multiply(BigDecimal.valueOf(times)))
                         : BigDecimal.valueOf(actual);
                 OutputEstimate estimate = outputs.get(output.getId());
                 if (estimate == null) {

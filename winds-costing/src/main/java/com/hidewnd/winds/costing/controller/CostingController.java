@@ -16,8 +16,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheConfig;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -53,6 +55,11 @@ public class CostingController {
             unless = "#result.obj == null || !#result.obj.estimateComplete || !#result.obj.costComplete || !#result.obj.valueComplete")
     public R<CostListResult> costValueList(@Validated(RequestModel.class) @RequestBody CostListRequest request) {
         return costingService.queryCostingList(request);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public R<String> invalidRequest() {
+        return R.error(R.CODE_PARAM_ERROR, "成本请求参数格式无效，技艺等级须为0至50的整数");
     }
 
 

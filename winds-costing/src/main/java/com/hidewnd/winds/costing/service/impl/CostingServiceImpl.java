@@ -44,7 +44,7 @@ public class CostingServiceImpl implements CostingService {
 
     @Override
     public R<CostItemResult> queryCosting(CostItemRequest request) {
-        FormulaBuilder builder = FormulaBuilder.create(CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate()))
+        FormulaBuilder builder = FormulaBuilder.create(CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate()), request.getProfessionLevel())
                 .addFormula(request.getFormulaName(), request.getNumber()).parseFormulas(formulaParseAdapter).analysisMaterial();
         CostItemResult result = new CostItemResult();
         Formulas formula = builder.getByName(request.getFormulaName());
@@ -65,7 +65,7 @@ public class CostingServiceImpl implements CostingService {
 
     @Override
     public R<CostListResult> queryCostingList(CostListRequest request) {
-        FormulaBuilder builder = FormulaBuilder.create(CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate()));
+        FormulaBuilder builder = FormulaBuilder.create(CalculationMode.resolve(request.getCalculationMode(), request.getRangeCreate()), request.getProfessionLevel());
         for (CostItem item : request.getItems()) builder.addFormula(item.getFormulaName(), item.getNumber());
         builder.parseFormulas(formulaParseAdapter).analysisMaterial();
         CostListResult result = new CostListResult();
@@ -111,6 +111,9 @@ public class CostingServiceImpl implements CostingService {
 
     private void computeCost(CostResult result, FormulaBuilder builder) {
         result.setCalculationMode(builder.getMode());
+        result.setProfessionLevel(builder.getProfessionLevel());
+        result.setLuckyOutputAddRate(builder.getLuckyOutputAddRate());
+        result.setSpecialItemAddRate(builder.getSpecialItemAddRate());
         result.setEstimateComplete(builder.isEstimateComplete());
         result.setRequiredMap(builder.getMaterialMap());
         result.setMakeDetail(builder.getMakeList());
@@ -118,8 +121,8 @@ public class CostingServiceImpl implements CostingService {
         result.setOutputs(new ArrayList<>(builder.getOutputs().values()));
         List<String> notes = new ArrayList<>(builder.getNotes());
         notes.add(builder.getMode() == CalculationMode.EXPECTED
-                ? "配方表概率估算，暂未计技艺等级修正；数量范围按等概率计算，期望达到目标不代表保证产出。产物数量向下取整返回，制作次数与收益使用取整前期望值。"
-                : "旧数量模式只计算普通主产物，不将特殊产物计入收益。使用EXPECTED可计算各产物期望值。");
+                ? "等级加成在原概率上累加；本结果采用约定的估算模型。幸运加成提高数量区间均值，特殊产物按原概率比例分配总加成，不扣减主产物概率，也不重新归一化。期望达到目标不代表保证产出。产物数量向下取整返回，制作次数与收益使用取整前期望值。"
+                : "旧数量模式只计算普通主产物，不将特殊产物计入收益，技艺等级加成未参与计算。使用EXPECTED可计算各产物期望值。");
         notes.add("收益使用当前最低有效挂牌单价，仅为参考估值；精力未折算金币，拆解回收未抵扣成本。");
         if (builder.getMakeList().stream().anyMatch(d -> d.getName().startsWith("玄元"))) {
             notes.add("玄元相关帽鞋涉及境华、地脉玄元与拆解回收；使用不可交易地脉玄元制作的成品不可交易，本估值仅适用于可交易成品。");

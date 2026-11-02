@@ -16,6 +16,15 @@ public class CostResult implements Serializable {
     @Schema(description = "服务器")
     private String server;
 
+    @Schema(description = "本次使用的技艺等级")
+    private Integer professionLevel;
+
+    @Schema(description = "本次幸运概率累计加成，0至1；旧数量模式为0")
+    private BigDecimal luckyOutputAddRate;
+
+    @Schema(description = "本次特殊产物概率累计加成，0至1；旧数量模式为0")
+    private BigDecimal specialItemAddRate;
+
     @Schema(description = "预计总消耗精力")
     private Integer energies;
 
