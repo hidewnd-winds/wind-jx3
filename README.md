@@ -142,6 +142,7 @@ java -jar winds-application/target/winds-application.jar
 | 批量技艺成本计算 | `POST /costing/list` |
 | JX3API 代理 | `POST /proxy/jx3api` |
 | 黄历图片更新 | `POST /thire/huangli/update` |
+| 当日黄历查询 | `GET /thire/huangli/now` |
 | 微博监控管理 | `/scout/weibo/**` |
 | WebSocket 推送 | `/ws` |
 

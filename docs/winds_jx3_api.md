@@ -50,6 +50,7 @@
 | 4.2 | POST | `/costing/list` | 无 | 查询多个技艺制品成本 |
 | 4.3 | POST | `/proxy/jx3api` | 无 | 代理调用 JX3API |
 | 4.4 | POST | `/thire/huangli/update` | 无 | 上传黄历图片 |
+| 4.5 | GET | `/thire/huangli/now` | 无 | 查询当日黄历 |
 
 ### 1.3 响应与错误
 
@@ -1220,6 +1221,41 @@ Content-Type: image/png
 ```
 
 **调用说明：** 上传示例中的二进制占位符须替换成真实文件内容；使用 SDK/form-data 工具时由工具生成 boundary。成功保存后向在线 WS 连接发送 huangli.updated。
+
+### 4.5 查询当日黄历
+
+**接口：`GET /thire/huangli/now`**
+
+**鉴权：** 无需 Token。无请求参数。
+
+按服务端当前日期查询，时区与上传接口省略 `date` 时一致。仅返回当天记录，不回退到历史日期。
+
+成功 HTTP 状态为 200，响应沿用 `success`、`code`、`msg`、`obj` 封装。有数据时，`obj.date` 为 `yyyy-MM-dd` 日期，`obj.url` 为图片地址：
+
+```json
+{
+  "success": true,
+  "code": 200,
+  "msg": "请求成功",
+  "obj": {
+    "date": "2026-11-04",
+    "url": "https://cdn.example.com/huangli/2026-11-04.png"
+  }
+}
+```
+
+无当天数据时仍为成功响应，`obj` 为 `null`：
+
+```json
+{
+  "success": true,
+  "code": 200,
+  "msg": "请求成功",
+  "obj": null
+}
+```
+
+bot 使用 `obj.url` 发送图片；`obj: null` 时保持提示“今日黄历尚未更新，快让我老大出来干活！”。请求失败或响应异常另行提示，不视为当天无数据。
 
 ## 5. WebSocket
 
